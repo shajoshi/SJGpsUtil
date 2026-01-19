@@ -1,0 +1,217 @@
+package com.sj.gpsutil.tracking
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.os.IBinder
+import android.os.Looper
+import android.content.pm.PackageManager
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.sj.gpsutil.MainActivity
+import com.sj.gpsutil.R
+import com.sj.gpsutil.data.SettingsRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+
+class TrackingService : Service() {
+    companion object {
+        const val ACTION_START = "com.sj.gpsutil.tracking.action.START"
+        const val ACTION_PAUSE = "com.sj.gpsutil.tracking.action.PAUSE"
+        const val ACTION_STOP = "com.sj.gpsutil.tracking.action.STOP"
+
+        private const val NOTIFICATION_CHANNEL_ID = "tracking_channel"
+        private const val NOTIFICATION_CHANNEL_NAME = "GPS Tracking"
+        private const val NOTIFICATION_ID = 1001
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private lateinit var notificationManager: NotificationManager
+    private lateinit var locationCallback: LocationCallback
+    private val fusedLocationClient by lazy { LocationServices.getFusedLocationProviderClient(this) }
+    private val settingsRepository by lazy { SettingsRepository(applicationContext) }
+    private val fileStore by lazy { TrackingFileStore(applicationContext) }
+
+    private var kmlWriter: KmlWriter? = null
+    private var currentStatus: TrackingStatus = TrackingStatus.Idle
+    private var isForeground = false
+    private var currentIntervalSeconds: Long = 5L
+
+    override fun onCreate() {
+        super.onCreate()
+        notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        createNotificationChannel()
+        locationCallback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                val location = result.lastLocation ?: return
+                val sample = TrackingSample(
+                    latitude = location.latitude,
+                    longitude = location.longitude,
+                    altitudeMeters = if (location.hasAltitude()) location.altitude else null,
+                    speedKmph = if (location.hasSpeed()) location.speed * 3.6 else null,
+                    bearingDegrees = if (location.hasBearing()) location.bearing else null,
+                    verticalAccuracyMeters = if (location.hasVerticalAccuracy()) location.verticalAccuracyMeters else null,
+                    provider = location.provider,
+                    timestampMillis = location.time
+                )
+                sample.verticalAccuracyMeters?.let {
+                    Log.d("TrackingService", "Vertical accuracy: ${String.format("%.1f", it)} m")
+                }
+                TrackingState.updateSample(sample)
+                if (currentStatus == TrackingStatus.Recording) {
+                    scope.launch {
+                        kmlWriter?.appendSample(sample)
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_START -> startRecording()
+            ACTION_PAUSE -> pauseRecording()
+            ACTION_STOP -> stopRecording()
+        }
+        return START_STICKY
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopLocationUpdates()
+        kmlWriter?.close()
+        kmlWriter = null
+        TrackingState.updateStatus(TrackingStatus.Idle)
+        isForeground = false
+    }
+
+    private fun startRecording() {
+        if (currentStatus == TrackingStatus.Recording) return
+        ensureForeground("Starting tracking")
+        scope.launch {
+            if (kmlWriter == null) {
+                val settings = settingsRepository.settingsFlow.first()
+                currentIntervalSeconds = settings.intervalSeconds
+                val handle = runCatching { fileStore.createTrackOutputStream(settings) }.getOrNull()
+                    ?: run {
+                        updateNotification("Failed to create file")
+                        stopSelf()
+                        return@launch
+                    }
+                kmlWriter = KmlWriter(handle.outputStream).apply { writeHeader() }
+            }
+            startLocationUpdates(currentIntervalSeconds)
+            currentStatus = TrackingStatus.Recording
+            TrackingState.updateStatus(currentStatus)
+            updateNotification("Recording")
+        }
+    }
+
+    private fun pauseRecording() {
+        if (currentStatus != TrackingStatus.Recording) return
+        stopLocationUpdates()
+        currentStatus = TrackingStatus.Paused
+        TrackingState.updateStatus(currentStatus)
+        updateNotification("Paused")
+    }
+
+    private fun stopRecording() {
+        if (currentStatus == TrackingStatus.Idle) return
+        stopLocationUpdates()
+        kmlWriter?.close()
+        kmlWriter = null
+        currentStatus = TrackingStatus.Idle
+        TrackingState.updateStatus(currentStatus)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        isForeground = false
+        stopSelf()
+    }
+
+    private fun startLocationUpdates(intervalSeconds: Long) {
+        if (!hasLocationPermission()) {
+            updateNotification("Location permission missing")
+            stopSelf()
+            return
+        }
+        val intervalMillis = intervalSeconds.coerceAtLeast(1L) * 1000L
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMillis)
+            .setMinUpdateIntervalMillis(intervalMillis)
+            .setMaxUpdateDelayMillis(intervalMillis)
+            .build()
+        fusedLocationClient.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
+    }
+
+    private fun stopLocationUpdates() {
+        fusedLocationClient.removeLocationUpdates(locationCallback)
+    }
+
+    private fun hasLocationPermission(): Boolean {
+        val fineGranted = ContextCompat.checkSelfPermission(
+            this,
+            android.Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        val coarseGranted = ContextCompat.checkSelfPermission(
+            this,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        return fineGranted || coarseGranted
+    }
+
+    private fun ensureForeground(status: String) {
+        val notification = buildNotification(status)
+        if (!isForeground) {
+            startForeground(NOTIFICATION_ID, notification)
+            isForeground = true
+        } else {
+            notificationManager.notify(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun updateNotification(status: String) {
+        if (!isForeground) {
+            ensureForeground(status)
+            return
+        }
+        notificationManager.notify(NOTIFICATION_ID, buildNotification(status))
+    }
+
+    private fun buildNotification(status: String) =
+        NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("GPS Tracking")
+            .setContentText(status)
+            .setContentIntent(mainActivityPendingIntent())
+            .setOngoing(true)
+            .build()
+
+    private fun mainActivityPendingIntent(): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java)
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return PendingIntent.getActivity(this, 0, intent, flags)
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val channel = NotificationChannel(
+            NOTIFICATION_CHANNEL_ID,
+            NOTIFICATION_CHANNEL_NAME,
+            NotificationManager.IMPORTANCE_LOW
+        )
+        notificationManager.createNotificationChannel(channel)
+    }
+}

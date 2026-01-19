@@ -16,7 +16,8 @@ private const val KML_MIME_TYPE = "application/vnd.google-earth.kml+xml"
 class TrackingFileStore(private val context: Context) {
     data class TrackFileHandle(
         val uri: Uri,
-        val outputStream: OutputStream
+        val outputStream: OutputStream,
+        val filename: String
     )
 
     fun createTrackOutputStream(settings: TrackingSettings): TrackFileHandle {
@@ -42,7 +43,7 @@ class TrackingFileStore(private val context: Context) {
             ?: error("Unable to create file in Downloads")
         val outputStream = resolver.openOutputStream(uri)
             ?: error("Unable to open output stream for Downloads file")
-        return TrackFileHandle(uri, outputStream)
+        return TrackFileHandle(uri, outputStream, filename)
     }
 
     private fun createInFolder(folderUri: Uri, filename: String): TrackFileHandle {
@@ -52,6 +53,7 @@ class TrackingFileStore(private val context: Context) {
             ?: error("Unable to create file in selected folder")
         val outputStream = context.contentResolver.openOutputStream(file.uri)
             ?: error("Unable to open output stream for folder file")
-        return TrackFileHandle(file.uri, outputStream)
+        val resolvedName = file.name ?: filename
+        return TrackFileHandle(file.uri, outputStream, resolvedName)
     }
 }

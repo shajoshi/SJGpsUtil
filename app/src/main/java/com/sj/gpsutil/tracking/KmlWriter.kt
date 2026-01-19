@@ -26,17 +26,25 @@ class KmlWriter(outputStream: OutputStream) {
         val altitude = sample.altitudeMeters ?: 0.0
         val speed = sample.speedKmph?.let { "%.2f".format(it) } ?: ""
         val bearing = sample.bearingDegrees?.let { "%.1f".format(it) } ?: ""
+        val accuracy = sample.accuracyMeters?.let { "%.1f".format(it) } ?: ""
+        val verticalAccuracy = sample.verticalAccuracyMeters?.let { "%.1f".format(it) } ?: ""
         val timestamp = DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochMilli(sample.timestampMillis))
 
         writer.write("<Placemark>")
         writer.newLine()
-        writer.write("<name>$timestamp</name>")
+        writer.write("<name></name>")
         writer.newLine()
         writer.write("<ExtendedData>")
+        writer.newLine()
+        writer.write("<Data name=\"timestamp\"><value>$timestamp</value></Data>")
         writer.newLine()
         writer.write("<Data name=\"speedKmph\"><value>$speed</value></Data>")
         writer.newLine()
         writer.write("<Data name=\"bearingDegrees\"><value>$bearing</value></Data>")
+        writer.newLine()
+        writer.write("<Data name=\"accuracyMeters\"><value>$accuracy</value></Data>")
+        writer.newLine()
+        writer.write("<Data name=\"verticalAccuracyMeters\"><value>$verticalAccuracy</value></Data>")
         writer.newLine()
         writer.write("</ExtendedData>")
         writer.newLine()

@@ -19,8 +19,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -30,12 +32,19 @@ import androidx.core.content.ContextCompat
 import com.sj.gpsutil.tracking.TrackingService
 import com.sj.gpsutil.tracking.TrackingState
 import com.sj.gpsutil.tracking.TrackingStatus
+import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 @Composable
 fun TrackingScreen(modifier: Modifier = Modifier) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val status by TrackingState.status.collectAsState()
     val latestSample by TrackingState.latestSample.collectAsState()
+    val accumulatedMillis by TrackingState.elapsedMillis.collectAsState()
+    val recordingStartMillis by TrackingState.recordingStartMillis.collectAsState()
+    val pointCount by TrackingState.pointCount.collectAsState()
+    val satelliteCount by TrackingState.satelliteCount.collectAsState()
+    val currentFileName by TrackingState.currentFileName.collectAsState()
     var pendingStart by remember { mutableStateOf(false) }
     val requiredPermissions = remember {
         buildList {
@@ -65,9 +74,9 @@ fun TrackingScreen(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text("Tracking", style = MaterialTheme.typography.headlineSmall)
-        val providerDisplay = latestSample?.provider?.uppercase() ?: "--"
+        val accuracyDisplay = latestSample?.accuracyMeters?.let { "±%.1f m".format(it) } ?: "--"
         Text(
-            "Status: ${status.name}  |  Provider: $providerDisplay",
+            "Status: ${status.name}  |  Accuracy: $accuracyDisplay",
             style = MaterialTheme.typography.bodyLarge
         )
 
@@ -76,7 +85,9 @@ fun TrackingScreen(modifier: Modifier = Modifier) {
         } ?: "--"
         val altitudeText = latestSample?.altitudeMeters?.let { "%.1f m".format(it) } ?: "--"
         val speedText = latestSample?.speedKmph?.let { "%.1f km/h".format(it) } ?: "--"
-        val bearingText = latestSample?.bearingDegrees?.let { "%.1f°".format(it) } ?: "--"
+        val bearingValue = latestSample?.bearingDegrees
+        val bearingText = bearingValue?.let { "%.1f°".format(it) } ?: "--"
+        val bearingCardinal = bearingToCardinal(bearingValue)
         val verticalAccuracyText = latestSample?.verticalAccuracyMeters?.let { "±%.1f m".format(it) } ?: "--"
 
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -84,7 +95,12 @@ fun TrackingScreen(modifier: Modifier = Modifier) {
             Text("Altitude: $altitudeText")
             Text("Vertical accuracy: $verticalAccuracyText")
             Text("Speed: $speedText")
-            Text("Bearing: $bearingText")
+            val bearingDisplay = if (bearingCardinal != null && bearingText != "--") {
+                "$bearingText ($bearingCardinal)"
+            } else {
+                bearingText
+            }
+            Text("Bearing: $bearingDisplay")
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -120,6 +136,26 @@ fun TrackingScreen(modifier: Modifier = Modifier) {
                 Text("Stop")
             }
         }
+
+        val tickingNow = remember { mutableLongStateOf(System.currentTimeMillis()) }
+        LaunchedEffect(recordingStartMillis) {
+            if (recordingStartMillis != null) {
+                while (recordingStartMillis != null) {
+                    tickingNow.longValue = System.currentTimeMillis()
+                    delay(1000)
+                }
+            }
+        }
+        val runningContribution = recordingStartMillis?.let { start ->
+            (tickingNow.longValue - start).coerceAtLeast(0L)
+        } ?: 0L
+        val totalSeconds = ((accumulatedMillis + runningContribution) / 1000).coerceAtLeast(0L)
+        val formattedTime = formatSeconds(totalSeconds)
+        Text("Tracking time: $formattedTime")
+        Text("Points: $pointCount")
+        Text("Satellites: $satelliteCount")
+        val fileLabel = currentFileName ?: "--"
+        Text("Current file: $fileLabel")
     }
 }
 
@@ -132,4 +168,24 @@ private fun sendTrackingAction(context: Context, action: String) {
     } else {
         context.startService(intent)
     }
+}
+
+private fun bearingToCardinal(bearingDegrees: Float?): String? {
+    val bearing = bearingDegrees ?: return null
+    val normalized = ((bearing % 360) + 360) % 360
+    val directions = listOf(
+        "N", "NNE", "NE", "ENE",
+        "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW",
+        "W", "WNW", "NW", "NNW"
+    )
+    val index = (normalized / 22.5).roundToInt() % directions.size
+    return directions[index]
+}
+
+private fun formatSeconds(totalSeconds: Long): String {
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return "%02d:%02d:%02d".format(hours, minutes, seconds)
 }

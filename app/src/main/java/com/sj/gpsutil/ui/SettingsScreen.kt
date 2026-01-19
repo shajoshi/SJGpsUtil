@@ -2,6 +2,8 @@ package com.sj.gpsutil.ui
 
 import android.content.Context
 import android.net.Uri
+import android.os.Environment
+import android.provider.DocumentsContract
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -24,8 +27,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
 import com.sj.gpsutil.data.SettingsRepository
 import com.sj.gpsutil.data.TrackingSettings
+import com.sj.gpsutil.data.MIN_INTERVAL_SECONDS
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -39,7 +44,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         mutableStateOf(settings.intervalSeconds.toString())
     }
     var folderLabel by remember(settings.folderUri) {
-        mutableStateOf(folderLabelFromUri(context, settings.folderUri))
+        mutableStateOf(folderPathFromUri(context, settings.folderUri))
     }
 
     val folderPicker = rememberLauncherForActivityResult(
@@ -47,7 +52,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     ) { uri ->
         if (uri != null) {
             takePersistablePermission(context, uri)
-            folderLabel = folderLabelFromUri(context, uri.toString())
+            folderLabel = folderPathFromUri(context, uri.toString())
             scope.launch(Dispatchers.IO) {
                 repository.updateFolderUri(uri.toString())
             }
@@ -66,21 +71,49 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             value = intervalText,
             onValueChange = { intervalText = it },
             label = { Text("Interval (seconds)") },
+            supportingText = {
+                Text("Minimum ${MIN_INTERVAL_SECONDS}s; shorter values are clamped")
+            },
             singleLine = true
         )
+        val intervalTooLow = intervalText.toLongOrNull()?.let { it < MIN_INTERVAL_SECONDS } ?: false
+        if (intervalTooLow) {
+            Text(
+                text = "Value below minimum – it will be saved as ${MIN_INTERVAL_SECONDS}s",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
         Button(onClick = {
-            val seconds = intervalText.toLongOrNull()?.coerceAtLeast(1) ?: 5L
+            val seconds = intervalText.toLongOrNull()?.coerceAtLeast(MIN_INTERVAL_SECONDS) ?: MIN_INTERVAL_SECONDS
             intervalText = seconds.toString()
             scope.launch(Dispatchers.IO) {
                 repository.updateIntervalSeconds(seconds)
             }
+            Toast.makeText(context, "Interval set to ${seconds}s", Toast.LENGTH_LONG).show()
         }) {
             Text("Save interval")
         }
 
+        val presetOptions = listOf(5L, 10L, 15L, 30L)
+        Text("Quick select:")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            presetOptions.forEach { seconds ->
+                OutlinedButton(onClick = {
+                    intervalText = seconds.toString()
+                    scope.launch(Dispatchers.IO) {
+                        repository.updateIntervalSeconds(seconds)
+                    }
+                    Toast.makeText(context, "Interval set to ${seconds}s", Toast.LENGTH_LONG).show()
+                }) {
+                    Text("${seconds}s")
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(8.dp))
 
-        Text("Save folder: ${folderLabel ?: "Downloads"}")
+        Text("Save folder: ${folderLabel ?: defaultDownloadsPath(context)}")
         OutlinedButton(onClick = { folderPicker.launch(null) }) {
             Text("Choose folder")
         }
@@ -100,13 +133,29 @@ private fun takePersistablePermission(context: Context, uri: Uri) {
     context.contentResolver.takePersistableUriPermission(uri, flags)
 }
 
-private fun folderLabelFromUri(context: Context, uriString: String?): String? {
+private fun folderPathFromUri(context: Context, uriString: String?): String? {
     if (uriString.isNullOrBlank()) return null
     val uri = Uri.parse(uriString)
     return runCatching {
-        val doc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
-        doc?.name
-    }.getOrNull()
+        val documentId = DocumentsContract.getTreeDocumentId(uri)
+        val parts = documentId.split(":", limit = 2)
+        val root = parts.getOrNull(0) ?: "primary"
+        val relativePath = parts.getOrNull(1)
+        val basePath = if (root.equals("primary", ignoreCase = true)) {
+            Environment.getExternalStorageDirectory().absolutePath
+        } else {
+            "/storage/$root"
+        }
+        if (relativePath.isNullOrBlank()) basePath else "$basePath/${relativePath.trimStart('/')}"
+    }.getOrElse {
+        androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)?.name
+    }
+}
+
+private fun defaultDownloadsPath(context: Context): String {
+    return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)?.absolutePath
+        ?: context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)?.absolutePath
+        ?: "Downloads"
 }
 
 private object IntentFlags {

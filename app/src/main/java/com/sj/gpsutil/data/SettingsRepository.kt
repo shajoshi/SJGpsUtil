@@ -8,12 +8,14 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
+const val MIN_INTERVAL_SECONDS = 5L
+
 private const val SETTINGS_STORE_NAME = "tracking_settings"
 
 val Context.settingsDataStore by preferencesDataStore(SETTINGS_STORE_NAME)
 
 data class TrackingSettings(
-    val intervalSeconds: Long = 5L,
+    val intervalSeconds: Long = MIN_INTERVAL_SECONDS,
     val folderUri: String? = null
 )
 
@@ -23,14 +25,14 @@ class SettingsRepository(private val context: Context) {
 
     val settingsFlow: Flow<TrackingSettings> = context.settingsDataStore.data.map { prefs ->
         TrackingSettings(
-            intervalSeconds = prefs[intervalKey] ?: 5L,
+            intervalSeconds = (prefs[intervalKey] ?: MIN_INTERVAL_SECONDS).coerceAtLeast(MIN_INTERVAL_SECONDS),
             folderUri = prefs[folderUriKey]
         )
     }
 
     suspend fun updateIntervalSeconds(seconds: Long) {
         context.settingsDataStore.edit { prefs ->
-            prefs[intervalKey] = seconds
+            prefs[intervalKey] = seconds.coerceAtLeast(MIN_INTERVAL_SECONDS)
         }
     }
 

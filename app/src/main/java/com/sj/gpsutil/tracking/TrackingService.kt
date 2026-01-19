@@ -6,7 +6,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.location.GnssStatus
+import android.location.LocationManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.content.pm.PackageManager
@@ -42,6 +45,8 @@ class TrackingService : Service() {
     private lateinit var notificationManager: NotificationManager
     private lateinit var locationCallback: LocationCallback
     private val fusedLocationClient by lazy { LocationServices.getFusedLocationProviderClient(this) }
+    private val locationManager by lazy { getSystemService(Context.LOCATION_SERVICE) as LocationManager }
+    private var gnssStatusCallback: GnssStatus.Callback? = null
     private val settingsRepository by lazy { SettingsRepository(applicationContext) }
     private val fileStore by lazy { TrackingFileStore(applicationContext) }
 
@@ -64,7 +69,7 @@ class TrackingService : Service() {
                     speedKmph = if (location.hasSpeed()) location.speed * 3.6 else null,
                     bearingDegrees = if (location.hasBearing()) location.bearing else null,
                     verticalAccuracyMeters = if (location.hasVerticalAccuracy()) location.verticalAccuracyMeters else null,
-                    provider = location.provider,
+                    accuracyMeters = if (location.hasAccuracy()) location.accuracy else null,
                     timestampMillis = location.time
                 )
                 sample.verticalAccuracyMeters?.let {
@@ -74,10 +79,12 @@ class TrackingService : Service() {
                 if (currentStatus == TrackingStatus.Recording) {
                     scope.launch {
                         kmlWriter?.appendSample(sample)
+                        TrackingState.incrementPointCount()
                     }
                 }
             }
         }
+        registerGnssCallback()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -98,6 +105,7 @@ class TrackingService : Service() {
         kmlWriter = null
         TrackingState.updateStatus(TrackingStatus.Idle)
         isForeground = false
+        unregisterGnssCallback()
     }
 
     private fun startRecording() {
@@ -114,10 +122,13 @@ class TrackingService : Service() {
                         return@launch
                     }
                 kmlWriter = KmlWriter(handle.outputStream).apply { writeHeader() }
+                TrackingState.resetPointCount()
+                TrackingState.updateCurrentFileName(handle.filename)
             }
             startLocationUpdates(currentIntervalSeconds)
             currentStatus = TrackingStatus.Recording
             TrackingState.updateStatus(currentStatus)
+            TrackingState.onRecordingStarted()
             updateNotification("Recording")
         }
     }
@@ -127,6 +138,7 @@ class TrackingService : Service() {
         stopLocationUpdates()
         currentStatus = TrackingStatus.Paused
         TrackingState.updateStatus(currentStatus)
+        TrackingState.onRecordingPaused()
         updateNotification("Paused")
     }
 
@@ -137,6 +149,7 @@ class TrackingService : Service() {
         kmlWriter = null
         currentStatus = TrackingStatus.Idle
         TrackingState.updateStatus(currentStatus)
+        TrackingState.onRecordingStopped()
         stopForeground(STOP_FOREGROUND_REMOVE)
         isForeground = false
         stopSelf()
@@ -158,6 +171,37 @@ class TrackingService : Service() {
 
     private fun stopLocationUpdates() {
         fusedLocationClient.removeLocationUpdates(locationCallback)
+    }
+
+    private fun registerGnssCallback() {
+        if (!hasLocationPermission() || Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        if (gnssStatusCallback != null) return
+        val callback = object : GnssStatus.Callback() {
+            override fun onSatelliteStatusChanged(status: GnssStatus) {
+                TrackingState.updateSatelliteCount(status.satelliteCount)
+            }
+        }
+        val success = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching {
+                locationManager.registerGnssStatusCallback(mainExecutor, callback)
+            }.isSuccess
+        } else {
+            val handler = Handler(Looper.getMainLooper())
+            runCatching {
+                locationManager.registerGnssStatusCallback(callback, handler)
+            }.isSuccess
+        }
+        if (!success) {
+            gnssStatusCallback = null
+        }
+    }
+
+    private fun unregisterGnssCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        gnssStatusCallback?.let { callback ->
+            locationManager.unregisterGnssStatusCallback(callback)
+            gnssStatusCallback = null
+        }
     }
 
     private fun hasLocationPermission(): Boolean {

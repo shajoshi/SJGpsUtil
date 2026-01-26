@@ -17,6 +17,7 @@ data class TrackingSample(
     val bearingDegrees: Float?,
     val verticalAccuracyMeters: Float?,
     val accuracyMeters: Float?,
+    val satelliteCount: Int?,
     val timestampMillis: Long
 )
 

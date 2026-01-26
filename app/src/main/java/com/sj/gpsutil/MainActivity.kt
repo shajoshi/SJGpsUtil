@@ -8,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -28,6 +29,7 @@ import androidx.compose.ui.tooling.preview.PreviewScreenSizes
 import com.sj.gpsutil.tracking.TrackingState
 import com.sj.gpsutil.tracking.TrackingStatus
 import com.sj.gpsutil.ui.SettingsScreen
+import com.sj.gpsutil.ui.TrackHistoryScreen
 import com.sj.gpsutil.ui.TrackingScreen
 import com.sj.gpsutil.ui.theme.SJGpsUtilTheme
 
@@ -85,6 +87,7 @@ fun SJGpsUtilApp() {
         Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
             when (currentDestination) {
                 AppDestinations.TRACKING -> TrackingScreen(modifier = Modifier.padding(innerPadding))
+                AppDestinations.HISTORY -> TrackHistoryScreen(modifier = Modifier.padding(innerPadding))
                 AppDestinations.SETTINGS -> SettingsScreen(modifier = Modifier.padding(innerPadding))
             }
         }
@@ -96,6 +99,7 @@ enum class AppDestinations(
     val icon: ImageVector,
 ) {
     TRACKING("Tracking", Icons.Default.Home),
+    HISTORY("Tracks", Icons.Default.History),
     SETTINGS("Settings", Icons.Default.Settings),
 }
 

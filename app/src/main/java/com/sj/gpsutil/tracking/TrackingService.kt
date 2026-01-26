@@ -23,6 +23,7 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.sj.gpsutil.MainActivity
 import com.sj.gpsutil.R
+import com.sj.gpsutil.data.OutputFormat
 import com.sj.gpsutil.data.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -50,7 +51,7 @@ class TrackingService : Service() {
     private val settingsRepository by lazy { SettingsRepository(applicationContext) }
     private val fileStore by lazy { TrackingFileStore(applicationContext) }
 
-    private var kmlWriter: KmlWriter? = null
+    private var trackWriter: TrackWriter? = null
     private var currentStatus: TrackingStatus = TrackingStatus.Idle
     private var isForeground = false
     private var currentIntervalSeconds: Long = 5L
@@ -70,6 +71,7 @@ class TrackingService : Service() {
                     bearingDegrees = if (location.hasBearing()) location.bearing else null,
                     verticalAccuracyMeters = if (location.hasVerticalAccuracy()) location.verticalAccuracyMeters else null,
                     accuracyMeters = if (location.hasAccuracy()) location.accuracy else null,
+                    satelliteCount = TrackingState.satelliteCount.value,
                     timestampMillis = location.time
                 )
                 sample.verticalAccuracyMeters?.let {
@@ -78,7 +80,7 @@ class TrackingService : Service() {
                 TrackingState.updateSample(sample)
                 if (currentStatus == TrackingStatus.Recording) {
                     scope.launch {
-                        kmlWriter?.appendSample(sample)
+                        trackWriter?.appendSample(sample)
                         TrackingState.incrementPointCount()
                     }
                 }
@@ -101,8 +103,8 @@ class TrackingService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         stopLocationUpdates()
-        kmlWriter?.close()
-        kmlWriter = null
+        trackWriter?.close()
+        trackWriter = null
         TrackingState.updateStatus(TrackingStatus.Idle)
         isForeground = false
         unregisterGnssCallback()
@@ -112,7 +114,7 @@ class TrackingService : Service() {
         if (currentStatus == TrackingStatus.Recording) return
         ensureForeground("Starting tracking")
         scope.launch {
-            if (kmlWriter == null) {
+            if (trackWriter == null) {
                 val settings = settingsRepository.settingsFlow.first()
                 currentIntervalSeconds = settings.intervalSeconds
                 val handle = runCatching { fileStore.createTrackOutputStream(settings) }.getOrNull()
@@ -121,7 +123,11 @@ class TrackingService : Service() {
                         stopSelf()
                         return@launch
                     }
-                kmlWriter = KmlWriter(handle.outputStream).apply { writeHeader() }
+                trackWriter = when (settings.outputFormat) {
+                    OutputFormat.GPX -> GpxWriter(handle.outputStream)
+                    OutputFormat.KML -> KmlWriter(handle.outputStream)
+                    OutputFormat.JSON -> JsonWriter(handle.outputStream)
+                }.apply { writeHeader() }
                 TrackingState.resetPointCount()
                 TrackingState.updateCurrentFileName(handle.filename)
             }
@@ -145,8 +151,8 @@ class TrackingService : Service() {
     private fun stopRecording() {
         if (currentStatus == TrackingStatus.Idle) return
         stopLocationUpdates()
-        kmlWriter?.close()
-        kmlWriter = null
+        trackWriter?.close()
+        trackWriter = null
         currentStatus = TrackingStatus.Idle
         TrackingState.updateStatus(currentStatus)
         TrackingState.onRecordingStopped()

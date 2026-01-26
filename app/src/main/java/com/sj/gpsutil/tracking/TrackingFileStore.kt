@@ -6,12 +6,15 @@ import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.documentfile.provider.DocumentFile
+import com.sj.gpsutil.data.OutputFormat
 import com.sj.gpsutil.data.TrackingSettings
 import java.io.OutputStream
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 private const val KML_MIME_TYPE = "application/vnd.google-earth.kml+xml"
+private const val GPX_MIME_TYPE = "application/gpx+xml"
+private const val JSON_MIME_TYPE = "application/json"
 
 class TrackingFileStore(private val context: Context) {
     data class TrackFileHandle(
@@ -22,21 +25,25 @@ class TrackingFileStore(private val context: Context) {
 
     fun createTrackOutputStream(settings: TrackingSettings): TrackFileHandle {
         val timestamp = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss").format(LocalDateTime.now())
-        val filename = "track_$timestamp.kml"
+        val (filename, mimeType) = when (settings.outputFormat) {
+            OutputFormat.GPX -> "track_$timestamp.gpx" to GPX_MIME_TYPE
+            OutputFormat.KML -> "track_$timestamp.kml" to KML_MIME_TYPE
+            OutputFormat.JSON -> "track_$timestamp.json" to JSON_MIME_TYPE
+        }
         val folderUri = settings.folderUri?.let { Uri.parse(it) }
 
         return if (folderUri != null) {
-            createInFolder(folderUri, filename)
+            createInFolder(folderUri, filename, mimeType)
         } else {
-            createInDownloads(filename)
+            createInDownloads(filename, mimeType)
         }
     }
 
-    private fun createInDownloads(filename: String): TrackFileHandle {
+    private fun createInDownloads(filename: String, mimeType: String): TrackFileHandle {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, filename)
-            put(MediaStore.Downloads.MIME_TYPE, KML_MIME_TYPE)
+            put(MediaStore.Downloads.MIME_TYPE, mimeType)
             put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
         }
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
@@ -46,10 +53,10 @@ class TrackingFileStore(private val context: Context) {
         return TrackFileHandle(uri, outputStream, filename)
     }
 
-    private fun createInFolder(folderUri: Uri, filename: String): TrackFileHandle {
+    private fun createInFolder(folderUri: Uri, filename: String, mimeType: String): TrackFileHandle {
         val folder = DocumentFile.fromTreeUri(context, folderUri)
             ?: error("Invalid folder Uri")
-        val file = folder.createFile(KML_MIME_TYPE, filename)
+        val file = folder.createFile(mimeType, filename)
             ?: error("Unable to create file in selected folder")
         val outputStream = context.contentResolver.openOutputStream(file.uri)
             ?: error("Unable to open output stream for folder file")

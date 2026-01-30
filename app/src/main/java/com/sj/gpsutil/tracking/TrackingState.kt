@@ -1,5 +1,6 @@
 package com.sj.gpsutil.tracking
 
+import android.location.Location
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -29,6 +30,9 @@ object TrackingState {
     private val _pointCount = MutableStateFlow(0L)
     private val _satelliteCount = MutableStateFlow(0)
     private val _currentFileName = MutableStateFlow<String?>(null)
+    private val _distanceMeters = MutableStateFlow(0.0)
+    private val _lastDistanceSample = MutableStateFlow<TrackingSample?>(null)
+    private val _minAccuracyForDistanceCalcMeters = MutableStateFlow(5f)
 
     val status = _status.asStateFlow()
     val latestSample = _latestSample.asStateFlow()
@@ -37,6 +41,8 @@ object TrackingState {
     val pointCount = _pointCount.asStateFlow()
     val satelliteCount = _satelliteCount.asStateFlow()
     val currentFileName = _currentFileName.asStateFlow()
+    val distanceMeters = _distanceMeters.asStateFlow()
+    val minAccuracyForDistanceCalcMeters = _minAccuracyForDistanceCalcMeters.asStateFlow()
 
     fun updateStatus(status: TrackingStatus) {
         _status.value = status
@@ -50,6 +56,8 @@ object TrackingState {
         if (_recordingStartMillis.value == null) {
             _recordingStartMillis.value = System.currentTimeMillis()
         }
+        _distanceMeters.value = 0.0
+        _lastDistanceSample.value = null
     }
 
     fun onRecordingPaused() {
@@ -64,6 +72,33 @@ object TrackingState {
         _pointCount.value = 0L
         _satelliteCount.value = 0
         _currentFileName.value = null
+        _distanceMeters.value = 0.0
+        _lastDistanceSample.value = null
+    }
+
+    fun onSampleRecorded(sample: TrackingSample) {
+        val accuracyMeters = sample.accuracyMeters
+        if (accuracyMeters != null && accuracyMeters > _minAccuracyForDistanceCalcMeters.value) {
+            return
+        }
+        val previous = _lastDistanceSample.value
+        if (previous != null) {
+            val segmentMeters = distanceMetersBetween(previous, sample)
+            _distanceMeters.value = _distanceMeters.value + segmentMeters
+        }
+        _lastDistanceSample.value = sample
+    }
+
+    private fun distanceMetersBetween(a: TrackingSample, b: TrackingSample): Double {
+        val results = FloatArray(1)
+        Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, results)
+        return results[0].toDouble()
+    }
+
+    fun updateMinAccuracyForDistanceCalcMeters(value: Float) {
+        if (value.isFinite() && value > 0f) {
+            _minAccuracyForDistanceCalcMeters.value = value
+        }
     }
 
     fun incrementPointCount() {

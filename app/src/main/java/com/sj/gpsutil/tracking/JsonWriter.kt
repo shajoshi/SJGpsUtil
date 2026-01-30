@@ -85,7 +85,7 @@ class JsonWriter(outputStream: OutputStream) : TrackWriter {
         writer.flush()
     }
 
-    override fun close() {
+    override fun close(totalDistanceMeters: Double?) {
         if (closed) return
 
         if (startMillis == null) {
@@ -96,8 +96,15 @@ class JsonWriter(outputStream: OutputStream) : TrackWriter {
             return
         }
 
-        writer.write("\n    ]\n")
-        writer.write("  }\n")
+        writer.write("\n    ]")
+        totalDistanceMeters?.let { meters ->
+            val km = meters / 1000.0
+            writer.write(",\n    \"summary\": {\n")
+            writer.write("      \"totalDistanceMeters\": ${"%.1f".format(meters)},\n")
+            writer.write("      \"totalDistanceKm\": ${"%.3f".format(km)}\n")
+            writer.write("    }")
+        }
+        writer.write("\n  }\n")
         writer.write("}\n")
         writer.flush()
         writer.close()

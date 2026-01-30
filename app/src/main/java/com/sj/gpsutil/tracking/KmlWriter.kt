@@ -72,7 +72,7 @@ class KmlWriter(outputStream: OutputStream) : TrackWriter {
         writer.flush()
     }
 
-    override fun close() {
+    override fun close(totalDistanceMeters: Double?) {
         if (closed) return
 
         writer.write("<Placemark>")
@@ -98,6 +98,24 @@ class KmlWriter(outputStream: OutputStream) : TrackWriter {
         writer.newLine()
         writer.write("</Placemark>")
         writer.newLine()
+
+        totalDistanceMeters?.let { meters ->
+            val km = meters / 1000.0
+            writer.write("<Placemark>")
+            writer.newLine()
+            writer.write("<name>Summary</name>")
+            writer.newLine()
+            writer.write("<ExtendedData>")
+            writer.newLine()
+            writer.write("<Data name=\"totalDistanceMeters\"><value>${"%.1f".format(meters)}</value></Data>")
+            writer.newLine()
+            writer.write("<Data name=\"totalDistanceKm\"><value>${"%.3f".format(km)}</value></Data>")
+            writer.newLine()
+            writer.write("</ExtendedData>")
+            writer.newLine()
+            writer.write("</Placemark>")
+            writer.newLine()
+        }
 
         writer.write("</Document>")
         writer.newLine()

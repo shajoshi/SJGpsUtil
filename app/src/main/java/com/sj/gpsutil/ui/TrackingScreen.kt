@@ -29,15 +29,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.tasks.Task
+import com.sj.gpsutil.data.SettingsRepository
+import com.sj.gpsutil.data.TrackingSettings
 import com.sj.gpsutil.tracking.TrackingService
 import com.sj.gpsutil.tracking.TrackingState
+import com.sj.gpsutil.tracking.TrackingSample
 import com.sj.gpsutil.tracking.TrackingStatus
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.math.roundToInt
+import kotlin.coroutines.resume
 
 @Composable
 fun TrackingScreen(modifier: Modifier = Modifier) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    val settingsRepository = remember { SettingsRepository(context) }
+    val settingsState by settingsRepository.settingsFlow.collectAsState(initial = TrackingSettings())
     val status by TrackingState.status.collectAsState()
     val latestSample by TrackingState.latestSample.collectAsState()
     val accumulatedMillis by TrackingState.elapsedMillis.collectAsState()
@@ -45,6 +55,7 @@ fun TrackingScreen(modifier: Modifier = Modifier) {
     val pointCount by TrackingState.pointCount.collectAsState()
     val satelliteCount by TrackingState.satelliteCount.collectAsState()
     val currentFileName by TrackingState.currentFileName.collectAsState()
+    val distanceMeters by TrackingState.distanceMeters.collectAsState()
     var pendingStart by remember { mutableStateOf(false) }
     val requiredPermissions = remember {
         buildList {
@@ -65,6 +76,45 @@ fun TrackingScreen(modifier: Modifier = Modifier) {
             sendTrackingAction(context, TrackingService.ACTION_START)
         }
         pendingStart = false
+    }
+
+    suspend fun <T> Task<T>.awaitOrNull(): T? = suspendCancellableCoroutine { cont ->
+        addOnSuccessListener { cont.resume(it) }
+        addOnFailureListener { cont.resume(null) }
+        addOnCanceledListener { cont.cancel() }
+    }
+
+    fun hasFineLocationPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    LaunchedEffect(status, settingsState.intervalSeconds) {
+        if (status != TrackingStatus.Idle) return@LaunchedEffect
+        if (!hasFineLocationPermission()) return@LaunchedEffect
+
+        val intervalMillis = settingsState.intervalSeconds.coerceAtLeast(1L) * 1000L
+
+        while (status == TrackingStatus.Idle) {
+            val location = runCatching { fusedLocationClient.lastLocation.awaitOrNull() }.getOrNull()
+            if (location != null) {
+                val sample = TrackingSample(
+                    latitude = location.latitude,
+                    longitude = location.longitude,
+                    altitudeMeters = if (location.hasAltitude()) location.altitude else null,
+                    speedKmph = if (location.hasSpeed()) location.speed * 3.6 else null,
+                    bearingDegrees = if (location.hasBearing()) location.bearing else null,
+                    verticalAccuracyMeters = if (location.hasVerticalAccuracy()) location.verticalAccuracyMeters else null,
+                    accuracyMeters = if (location.hasAccuracy()) location.accuracy else null,
+                    satelliteCount = null,
+                    timestampMillis = location.time
+                )
+                TrackingState.updateSample(sample)
+            }
+            delay(intervalMillis)
+        }
     }
 
     Column(
@@ -152,6 +202,8 @@ fun TrackingScreen(modifier: Modifier = Modifier) {
         val totalSeconds = ((accumulatedMillis + runningContribution) / 1000).coerceAtLeast(0L)
         val formattedTime = formatSeconds(totalSeconds)
         Text("Tracking time: $formattedTime")
+        val distanceKm = distanceMeters / 1000.0
+        Text("Distance: ${"%.2f".format(distanceKm)} km")
         Text("Points: $pointCount")
         Text("Satellites: $satelliteCount")
         val fileLabel = currentFileName ?: "--"

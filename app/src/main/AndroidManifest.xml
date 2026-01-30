@@ -20,6 +20,9 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.SJGpsUtil">
+        <meta-data
+            android:name="minAccuracyForDistanceCalc"
+            android:value="5.0" />
         <service
             android:name=".tracking.TrackingService"
             android:exported="false"

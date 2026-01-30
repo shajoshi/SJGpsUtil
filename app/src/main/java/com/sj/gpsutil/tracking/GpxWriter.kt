@@ -13,7 +13,7 @@ class GpxWriter(outputStream: OutputStream) : TrackWriter {
     override fun writeHeader() {
         writer.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
         writer.newLine()
-        writer.write("<gpx version=\"1.1\" creator=\"Tracker\" xmlns=\"http://www.topografix.com/GPX/1/1\">")
+        writer.write("<gpx version=\"1.1\" creator=\"Tracker\" xmlns=\"http://www.topografix.com/GPX/1/1\" xmlns:sj=\"http://sj.gpsutil\">")
         writer.newLine()
         writer.write("<trk>")
         writer.newLine()
@@ -40,10 +40,20 @@ class GpxWriter(outputStream: OutputStream) : TrackWriter {
         writer.flush()
     }
 
-    override fun close() {
+    override fun close(totalDistanceMeters: Double?) {
         if (closed) return
         writer.write("</trkseg>")
         writer.newLine()
+
+        totalDistanceMeters?.let { meters ->
+            val km = meters / 1000.0
+            writer.write("<extensions>\n")
+            writer.write("<sj:totalDistanceMeters>${"%.1f".format(meters)}</sj:totalDistanceMeters>\n")
+            writer.write("<sj:totalDistanceKm>${"%.3f".format(km)}</sj:totalDistanceKm>\n")
+            writer.write("</extensions>")
+            writer.newLine()
+        }
+
         writer.write("</trk>")
         writer.newLine()
         writer.write("</gpx>")

@@ -58,6 +58,7 @@ class TrackingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        applyDistanceAccuracyConfigFromManifest()
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         createNotificationChannel()
         locationCallback = object : LocationCallback() {
@@ -82,11 +83,21 @@ class TrackingService : Service() {
                     scope.launch {
                         trackWriter?.appendSample(sample)
                         TrackingState.incrementPointCount()
+                        TrackingState.onSampleRecorded(sample)
                     }
                 }
             }
         }
         registerGnssCallback()
+    }
+
+    private fun applyDistanceAccuracyConfigFromManifest() {
+        val threshold = runCatching {
+            val appInfo = packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
+            val value = appInfo.metaData?.getFloat("minAccuracyForDistanceCalc")
+            value ?: 5f
+        }.getOrDefault(5f)
+        TrackingState.updateMinAccuracyForDistanceCalcMeters(threshold)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -103,7 +114,7 @@ class TrackingService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         stopLocationUpdates()
-        trackWriter?.close()
+        trackWriter?.close(TrackingState.distanceMeters.value)
         trackWriter = null
         TrackingState.updateStatus(TrackingStatus.Idle)
         isForeground = false
@@ -151,7 +162,7 @@ class TrackingService : Service() {
     private fun stopRecording() {
         if (currentStatus == TrackingStatus.Idle) return
         stopLocationUpdates()
-        trackWriter?.close()
+        trackWriter?.close(TrackingState.distanceMeters.value)
         trackWriter = null
         currentStatus = TrackingStatus.Idle
         TrackingState.updateStatus(currentStatus)

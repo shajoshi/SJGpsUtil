@@ -33,6 +33,9 @@ object TrackingState {
     private val _distanceMeters = MutableStateFlow(0.0)
     private val _lastDistanceSample = MutableStateFlow<TrackingSample?>(null)
     private val _minAccuracyForDistanceCalcMeters = MutableStateFlow(5f)
+    private val _notMovingMillis = MutableStateFlow(0L)
+    private val _lastMovementTimestampMillis = MutableStateFlow<Long?>(null)
+    private val _skippedPoints = MutableStateFlow(0L)
 
     val status = _status.asStateFlow()
     val latestSample = _latestSample.asStateFlow()
@@ -43,6 +46,8 @@ object TrackingState {
     val currentFileName = _currentFileName.asStateFlow()
     val distanceMeters = _distanceMeters.asStateFlow()
     val minAccuracyForDistanceCalcMeters = _minAccuracyForDistanceCalcMeters.asStateFlow()
+    val notMovingMillis = _notMovingMillis.asStateFlow()
+    val skippedPoints = _skippedPoints.asStateFlow()
 
     fun updateStatus(status: TrackingStatus) {
         _status.value = status
@@ -58,6 +63,7 @@ object TrackingState {
         }
         _distanceMeters.value = 0.0
         _lastDistanceSample.value = null
+        resetNotMovingTimer()
     }
 
     fun onRecordingPaused() {
@@ -74,6 +80,8 @@ object TrackingState {
         _currentFileName.value = null
         _distanceMeters.value = 0.0
         _lastDistanceSample.value = null
+        resetNotMovingTimer()
+        _skippedPoints.value = 0L
     }
 
     fun onSampleRecorded(sample: TrackingSample) {
@@ -101,12 +109,40 @@ object TrackingState {
         }
     }
 
+    fun resetNotMovingTimer(nowMillis: Long = System.currentTimeMillis()) {
+        _lastMovementTimestampMillis.value = nowMillis
+        _notMovingMillis.value = 0L
+    }
+
+    fun markMovement(nowMillis: Long) {
+        _lastMovementTimestampMillis.value = nowMillis
+        _notMovingMillis.value = 0L
+    }
+
+    fun updateNotMoving(nowMillis: Long) {
+        val last = _lastMovementTimestampMillis.value
+        if (last == null) {
+            _lastMovementTimestampMillis.value = nowMillis
+            _notMovingMillis.value = 0L
+            return
+        }
+        _notMovingMillis.value = (nowMillis - last).coerceAtLeast(0L)
+    }
+
     fun incrementPointCount() {
         _pointCount.value = _pointCount.value + 1
     }
 
     fun resetPointCount() {
         _pointCount.value = 0L
+    }
+
+    fun incrementSkippedPoints() {
+        _skippedPoints.value = _skippedPoints.value + 1
+    }
+
+    fun resetSkippedPoints() {
+        _skippedPoints.value = 0L
     }
 
     fun updateSatelliteCount(count: Int) {

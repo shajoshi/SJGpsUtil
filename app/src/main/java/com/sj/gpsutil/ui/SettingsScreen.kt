@@ -22,14 +22,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import android.widget.Toast
 import com.sj.gpsutil.data.OutputFormat
@@ -75,22 +79,31 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            Text("Interval (sec)")
             TextField(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.width(80.dp),
                 value = intervalText,
-                onValueChange = { intervalText = it },
-                label = { Text("Interval (seconds)") },
-                supportingText = {
-                    Text("Minimum ${MIN_INTERVAL_SECONDS}s; shorter values are clamped")
+                onValueChange = { newValue ->
+                    val digitsOnly = newValue.filter { it.isDigit() }.take(2)
+                    intervalText = digitsOnly
                 },
                 singleLine = true
             )
             Button(
                 modifier = Modifier.width(88.dp),
                 onClick = {
-                    val seconds = intervalText.toLongOrNull()?.coerceAtLeast(MIN_INTERVAL_SECONDS) ?: MIN_INTERVAL_SECONDS
+                    val parsed = intervalText.toLongOrNull()
+                    if (parsed == null) {
+                        Toast.makeText(context, "Enter a valid number of seconds", Toast.LENGTH_LONG).show()
+                        return@Button
+                    }
+                    if (parsed < MIN_INTERVAL_SECONDS) {
+                        Toast.makeText(context, "Minimum ${MIN_INTERVAL_SECONDS}s", Toast.LENGTH_LONG).show()
+                    }
+                    val seconds = parsed.coerceAtLeast(MIN_INTERVAL_SECONDS)
                     intervalText = seconds.toString()
                     scope.launch(Dispatchers.IO) {
                         repository.updateIntervalSeconds(seconds)
@@ -100,14 +113,6 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             ) {
                 Text("Save")
             }
-        }
-        val intervalTooLow = intervalText.toLongOrNull()?.let { it < MIN_INTERVAL_SECONDS } ?: false
-        if (intervalTooLow) {
-            Text(
-                text = "Value below minimum – it will be saved as ${MIN_INTERVAL_SECONDS}s",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error
-            )
         }
         val presetOptions = listOf(5L, 10L, 15L, 30L)
         Text("Quick select:")
@@ -123,6 +128,30 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                     Text("${seconds}s")
                 }
             }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Disable point filtering")
+            val disableFilteringState = rememberUpdatedState(settings.disablePointFiltering)
+            Switch(
+                checked = disableFilteringState.value,
+                onCheckedChange = { checked ->
+                    scope.launch(Dispatchers.IO) {
+                        repository.updateDisablePointFiltering(checked)
+                    }
+                    Toast.makeText(
+                        context,
+                        if (checked) "Point filtering disabled" else "Point filtering enabled",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            )
         }
 
         Spacer(modifier = Modifier.height(8.dp))

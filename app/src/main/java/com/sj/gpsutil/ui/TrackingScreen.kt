@@ -56,6 +56,8 @@ fun TrackingScreen(modifier: Modifier = Modifier) {
     val satelliteCount by TrackingState.satelliteCount.collectAsState()
     val currentFileName by TrackingState.currentFileName.collectAsState()
     val distanceMeters by TrackingState.distanceMeters.collectAsState()
+    val notMovingMillis by TrackingState.notMovingMillis.collectAsState()
+    val skippedPoints by TrackingState.skippedPoints.collectAsState()
     var pendingStart by remember { mutableStateOf(false) }
     val requiredPermissions = remember {
         buildList {
@@ -202,9 +204,13 @@ fun TrackingScreen(modifier: Modifier = Modifier) {
         val totalSeconds = ((accumulatedMillis + runningContribution) / 1000).coerceAtLeast(0L)
         val formattedTime = formatSeconds(totalSeconds)
         Text("Tracking time: $formattedTime")
+        val notMovingSeconds = (notMovingMillis / 1000).coerceAtLeast(0L)
+        val notMovingDisplay = formatSeconds(notMovingSeconds)
+        Text("Not moving for: $notMovingDisplay")
         val distanceKm = distanceMeters / 1000.0
         Text("Distance: ${"%.2f".format(distanceKm)} km")
         Text("Points: $pointCount")
+        Text("Skipped points: $skippedPoints")
         Text("Satellites: $satelliteCount")
         val fileLabel = currentFileName ?: "--"
         Text("Current file: $fileLabel")

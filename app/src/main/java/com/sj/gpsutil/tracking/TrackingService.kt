@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.location.GnssStatus
+import android.location.Location
 import android.location.LocationManager
 import android.os.Build
 import android.os.Handler
@@ -30,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlin.math.max
 
 class TrackingService : Service() {
     companion object {
@@ -40,6 +42,10 @@ class TrackingService : Service() {
         private const val NOTIFICATION_CHANNEL_ID = "tracking_channel"
         private const val NOTIFICATION_CHANNEL_NAME = "GPS Tracking"
         private const val NOTIFICATION_ID = 1001
+
+        private const val REJECTION_WINDOW_SAMPLES = 20
+        private const val REJECTION_RATIO_THRESHOLD = 0.5
+        private const val REJECTION_WARNING_COOLDOWN_MS = 60_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -55,6 +61,11 @@ class TrackingService : Service() {
     private var currentStatus: TrackingStatus = TrackingStatus.Idle
     private var isForeground = false
     private var currentIntervalSeconds: Long = 5L
+    private var lastRecordedSample: TrackingSample? = null
+    private var totalSamplesSinceWindowReset = 0
+    private var rejectedSamplesSinceWindowReset = 0
+    private var lastRejectionWarningAtMillis = 0L
+    private var disablePointFiltering: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
@@ -81,9 +92,19 @@ class TrackingService : Service() {
                 TrackingState.updateSample(sample)
                 if (currentStatus == TrackingStatus.Recording) {
                     scope.launch {
-                        trackWriter?.appendSample(sample)
-                        TrackingState.incrementPointCount()
-                        TrackingState.onSampleRecorded(sample)
+                        totalSamplesSinceWindowReset++
+                        if (shouldRecordSample(sample)) {
+                            trackWriter?.appendSample(sample)
+                            TrackingState.incrementPointCount()
+                            TrackingState.onSampleRecorded(sample)
+                            TrackingState.markMovement(sample.timestampMillis)
+                            lastRecordedSample = sample
+                        } else {
+                            rejectedSamplesSinceWindowReset++
+                            TrackingState.incrementSkippedPoints()
+                            updateNotMoving(sample)
+                            maybeWarnOnHighRejectionRate()
+                        }
                     }
                 }
             }
@@ -127,6 +148,7 @@ class TrackingService : Service() {
         scope.launch {
             if (trackWriter == null) {
                 val settings = settingsRepository.settingsFlow.first()
+                disablePointFiltering = settings.disablePointFiltering
                 currentIntervalSeconds = settings.intervalSeconds
                 val handle = runCatching { fileStore.createTrackOutputStream(settings) }.getOrNull()
                     ?: run {
@@ -142,10 +164,14 @@ class TrackingService : Service() {
                 TrackingState.resetPointCount()
                 TrackingState.updateCurrentFileName(handle.filename)
             }
-            startLocationUpdates(currentIntervalSeconds)
             currentStatus = TrackingStatus.Recording
             TrackingState.updateStatus(currentStatus)
             TrackingState.onRecordingStarted()
+            lastRecordedSample = null
+            resetRejectionCounters()
+            TrackingState.resetNotMovingTimer()
+            TrackingState.resetSkippedPoints()
+            startLocationUpdates(currentIntervalSeconds)
             updateNotification("Recording")
         }
     }
@@ -167,9 +193,62 @@ class TrackingService : Service() {
         currentStatus = TrackingStatus.Idle
         TrackingState.updateStatus(currentStatus)
         TrackingState.onRecordingStopped()
+        lastRecordedSample = null
+        resetRejectionCounters()
+        TrackingState.resetNotMovingTimer()
+        TrackingState.resetSkippedPoints()
         stopForeground(STOP_FOREGROUND_REMOVE)
         isForeground = false
         stopSelf()
+    }
+
+    private fun shouldRecordSample(sample: TrackingSample): Boolean {
+        if (disablePointFiltering) return true
+        if (lastRecordedSample == null) return true // Always accept the first sample
+        val accuracy = sample.accuracyMeters
+        val minAccuracy = TrackingState.minAccuracyForDistanceCalcMeters.value
+        if (accuracy != null && accuracy > minAccuracy) return false
+
+        val previous = lastRecordedSample ?: return true
+        val result = FloatArray(1)
+        Location.distanceBetween(
+            previous.latitude,
+            previous.longitude,
+            sample.latitude,
+            sample.longitude,
+            result
+        )
+        val distance = result[0].toDouble()
+        if (distance >= minAccuracy.toDouble()) {
+            TrackingState.markMovement(sample.timestampMillis)
+            return true
+        }
+        updateNotMoving(sample)
+        return false
+    }
+
+    private fun updateNotMoving(sample: TrackingSample) {
+        if (!disablePointFiltering) {
+            TrackingState.updateNotMoving(sample.timestampMillis)
+        }
+    }
+
+    private fun maybeWarnOnHighRejectionRate() {
+        if (totalSamplesSinceWindowReset < REJECTION_WINDOW_SAMPLES) return
+        val ratio = rejectedSamplesSinceWindowReset.toDouble() / totalSamplesSinceWindowReset.toDouble()
+        if (ratio < REJECTION_RATIO_THRESHOLD) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastRejectionWarningAtMillis < REJECTION_WARNING_COOLDOWN_MS) return
+
+        updateNotification("Low accuracy: many points skipped")
+        lastRejectionWarningAtMillis = now
+        resetRejectionCounters()
+    }
+
+    private fun resetRejectionCounters() {
+        totalSamplesSinceWindowReset = 0
+        rejectedSamplesSinceWindowReset = 0
     }
 
     private fun startLocationUpdates(intervalSeconds: Long) {

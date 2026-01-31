@@ -1,6 +1,7 @@
 package com.sj.gpsutil.tracking
 
 import android.content.Context
+import android.location.Location
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
@@ -13,11 +14,8 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStream
 import java.io.InputStreamReader
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.pow
-import kotlin.math.sin
-import kotlin.math.sqrt
+import java.time.Instant
+import java.time.format.DateTimeParseException
 
 class TrackHistoryRepository(private val context: Context) {
     suspend fun listTracks(settings: TrackingSettings): List<TrackFileInfo> = withContext(Dispatchers.IO) {
@@ -30,7 +28,8 @@ class TrackHistoryRepository(private val context: Context) {
                     distanceKm = null,
                     extension = entry.extension,
                     uri = entry.documentFile?.uri,
-                    filePath = entry.file?.absolutePath
+                    filePath = entry.file?.absolutePath,
+                    sizeBytes = entry.sizeBytes
                 )
             }
     }
@@ -76,6 +75,7 @@ class TrackHistoryRepository(private val context: Context) {
                         name = doc.name.orEmpty(),
                         extension = doc.name.orEmpty().substringAfterLast('.', "").lowercase(),
                         lastModified = doc.lastModified(),
+                        sizeBytes = doc.length(),
                         documentFile = doc
                     )
                 }
@@ -86,6 +86,7 @@ class TrackHistoryRepository(private val context: Context) {
                     name = file.name,
                     extension = file.extension.lowercase(),
                     lastModified = file.lastModified(),
+                    sizeBytes = file.length(),
                     file = file
                 )
             } ?: emptyList()
@@ -98,24 +99,58 @@ class TrackHistoryRepository(private val context: Context) {
         return lower.startsWith("track_") && (lower.endsWith(".kml") || lower.endsWith(".gpx") || lower.endsWith(".json"))
     }
 
-    private fun computeDistanceKm(entry: FileEntry): Double? {
-        val coords = when (entry.extension.lowercase()) {
-            "kml" -> parseKml(entry)
-            "gpx" -> parseGpx(entry)
-            "json" -> parseJson(entry)
-            else -> emptyList()
+    suspend fun loadDetails(settings: TrackingSettings, info: TrackFileInfo): TrackDetails? = withContext(Dispatchers.IO) {
+        val entry = collectEntries(settings).find { candidate ->
+            when {
+                info.uri != null && candidate.documentFile?.uri == info.uri -> true
+                info.filePath != null && candidate.file?.absolutePath == info.filePath -> true
+                else -> candidate.name == info.name
+            }
+        } ?: return@withContext null
+
+        val parsed = when (entry.extension.lowercase()) {
+            "kml" -> parseKmlPoints(entry)
+            "gpx" -> parseGpxPoints(entry)
+            "json" -> parseJsonPoints(entry)
+            else -> ParsedTrack(emptyList())
         }
-        if (coords.size < 2) return 0.0
-        var distanceMeters = 0.0
-        for (i in 1 until coords.size) {
-            distanceMeters += haversineMeters(coords[i - 1], coords[i])
-        }
-        return distanceMeters / 1000.0
+
+        val distanceMeters = computeDistanceMeters(parsed.points)
+        val startMillis = parsed.points.firstOrNull()?.timestampMillis
+        val endMillis = parsed.points.lastOrNull()?.timestampMillis
+        val durationMillis = if (startMillis != null && endMillis != null) (endMillis - startMillis).coerceAtLeast(0) else null
+
+        TrackDetails(
+            name = entry.name,
+            distanceMeters = distanceMeters,
+            pointCount = if (parsed.points.isNotEmpty()) parsed.points.size else null,
+            startMillis = startMillis,
+            endMillis = endMillis,
+            durationMillis = durationMillis
+        )
     }
 
-    private fun parseKml(entry: FileEntry): List<Pair<Double, Double>> {
-        val text = entry.readText(context) ?: return emptyList()
+    private fun computeDistanceMeters(points: List<TrackPoint>): Double? {
+        if (points.size < 2) return null
+        var distance = 0.0
+        val result = FloatArray(1)
+        for (i in 1 until points.size) {
+            val a = points[i - 1]
+            val b = points[i]
+            Location.distanceBetween(a.lat, a.lon, b.lat, b.lon, result)
+            distance += result[0]
+        }
+        return distance
+    }
+
+    private data class ParsedTrack(val points: List<TrackPoint>)
+    private data class TrackPoint(val lat: Double, val lon: Double, val timestampMillis: Long?)
+
+    private fun parseKmlPoints(entry: FileEntry): ParsedTrack {
+        val text = entry.readText(context) ?: return ParsedTrack(emptyList())
         val coords = mutableListOf<Pair<Double, Double>>()
+        val times = mutableListOf<Long?>()
+
         val gxRegex = Regex("<gx:coord>(.*?)</gx:coord>")
         gxRegex.findAll(text).forEach { matchResult ->
             val parts = matchResult.groupValues[1].trim().split(" ")
@@ -125,58 +160,52 @@ class TrackHistoryRepository(private val context: Context) {
                 if (lat != null && lon != null) coords.add(lat to lon)
             }
         }
-        val coordRegex = Regex("<coordinates>(.*?)</coordinates>", RegexOption.DOT_MATCHES_ALL)
-        coordRegex.findAll(text).forEach { matchResult ->
-            val block = matchResult.groupValues[1]
-            block.split(Regex("\\s+")).forEach { coordinate ->
-                val parts = coordinate.split(",")
-                if (parts.size >= 2) {
-                    val lon = parts[0].toDoubleOrNull()
-                    val lat = parts[1].toDoubleOrNull()
-                    if (lat != null && lon != null) coords.add(lat to lon)
-                }
-            }
+
+        val whenRegex = Regex("<when>(.*?)</when>")
+        whenRegex.findAll(text).forEach { matchResult ->
+            val ts = matchResult.groupValues[1]
+            val millis = runCatching { Instant.parse(ts).toEpochMilli() }.getOrNull()
+            times.add(millis)
         }
-        return coords
+
+        val points = coords.mapIndexed { index, (lat, lon) ->
+            val ts = times.getOrNull(index)
+            TrackPoint(lat, lon, ts)
+        }
+        return ParsedTrack(points)
     }
 
-    private fun parseGpx(entry: FileEntry): List<Pair<Double, Double>> {
-        val text = entry.readText(context) ?: return emptyList()
-        val regex = Regex("""<trkpt[^>]*lat=\"([^\"]+)\"[^>]*lon=\"([^\"]+)\"""")
-        return regex.findAll(text).mapNotNull { match ->
+    private fun parseGpxPoints(entry: FileEntry): ParsedTrack {
+        val text = entry.readText(context) ?: return ParsedTrack(emptyList())
+        val regex = Regex("""<trkpt[^>]*lat=\"([^\"]+)\"[^>]*lon=\"([^\"]+)\"[^>]*>\s*(?:<ele>.*?</ele>\s*)?(?:<time>(.*?)</time>)?""", RegexOption.DOT_MATCHES_ALL)
+        val points = regex.findAll(text).mapNotNull { match ->
             val lat = match.groupValues[1].toDoubleOrNull()
             val lon = match.groupValues[2].toDoubleOrNull()
-            if (lat != null && lon != null) lat to lon else null
+            val timeStr = match.groupValues.getOrNull(3)?.takeIf { it.isNotBlank() }
+            val ts = timeStr?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
+            if (lat != null && lon != null) TrackPoint(lat, lon, ts) else null
         }.toList()
+        return ParsedTrack(points)
     }
 
-    private fun parseJson(entry: FileEntry): List<Pair<Double, Double>> {
-        val text = entry.readText(context) ?: return emptyList()
+    private fun parseJsonPoints(entry: FileEntry): ParsedTrack {
+        val text = entry.readText(context) ?: return ParsedTrack(emptyList())
         return runCatching {
             val root = JSONObject(text)
-            val dataArray = root.optJSONObject("gpslogger2path")?.optJSONArray("data") ?: return emptyList()
-            buildList {
+            val obj = root.optJSONObject("gpslogger2path") ?: return@runCatching ParsedTrack(emptyList())
+            val dataArray = obj.optJSONArray("data") ?: return@runCatching ParsedTrack(emptyList())
+            val startTs = obj.optJSONObject("meta")?.optLong("ts")
+            val points = buildList {
                 for (i in 0 until dataArray.length()) {
                     val gps = dataArray.optJSONObject(i)?.optJSONObject("gps") ?: continue
                     val lat = gps.optDouble("lat")
                     val lon = gps.optDouble("lon")
-                    if (!lat.isNaN() && !lon.isNaN()) add(lat to lon)
+                    val offset = gps.optLong("ts")
+                    if (!lat.isNaN() && !lon.isNaN()) add(TrackPoint(lat, lon, startTs?.plus(offset)))
                 }
             }
-        }.getOrElse { emptyList() }
-    }
-
-    private fun haversineMeters(a: Pair<Double, Double>, b: Pair<Double, Double>): Double {
-        val earthRadius = 6371000.0
-        val lat1 = Math.toRadians(a.first)
-        val lat2 = Math.toRadians(b.first)
-        val deltaLat = Math.toRadians(b.first - a.first)
-        val deltaLon = Math.toRadians(b.second - a.second)
-        val sinLat = sin(deltaLat / 2).pow(2)
-        val sinLon = sin(deltaLon / 2).pow(2)
-        val cosLat = cos(lat1) * cos(lat2)
-        val c = 2 * atan2(sqrt(sinLat + cosLat * sinLon), sqrt(1 - (sinLat + cosLat * sinLon)))
-        return earthRadius * c
+            ParsedTrack(points)
+        }.getOrElse { ParsedTrack(emptyList()) }
     }
 
     private fun FileEntry.readText(context: Context): String? {
@@ -203,13 +232,24 @@ class TrackHistoryRepository(private val context: Context) {
         val distanceKm: Double?,
         val extension: String,
         val uri: Uri? = null,
-        val filePath: String? = null
+        val filePath: String? = null,
+        val sizeBytes: Long? = null,
+    )
+
+    data class TrackDetails(
+        val name: String,
+        val distanceMeters: Double?,
+        val pointCount: Int?,
+        val startMillis: Long?,
+        val endMillis: Long?,
+        val durationMillis: Long?,
     )
 
     private data class FileEntry(
         val name: String,
         val extension: String,
         val lastModified: Long,
+        val sizeBytes: Long?,
         val documentFile: DocumentFile? = null,
         val file: File? = null
     )

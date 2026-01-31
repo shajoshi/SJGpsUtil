@@ -80,8 +80,20 @@ class JsonWriter(outputStream: OutputStream) : TrackWriter {
         writer.write("          \"climb\": 0,\n")
         writer.write("          \"salt\": $alt,\n")
         writer.write("          \"alt\": $alt\n")
-        writer.write("        }\n")
-        writer.write("      }")
+        writer.write("        }")
+        if (sample.accelXMean != null) {
+            writer.write(",\n")
+            writer.write("        \"accel\": {\n")
+            writer.write("          \"xMean\": ${"%.3f".format(sample.accelXMean)},\n")
+            writer.write("          \"yMean\": ${"%.3f".format(sample.accelYMean)},\n")
+            writer.write("          \"zMean\": ${"%.3f".format(sample.accelZMean)},\n")
+            writer.write("          \"magMax\": ${"%.3f".format(sample.accelMagnitudeMax)},\n")
+            writer.write("          \"rms\": ${"%.3f".format(sample.accelRMS)}\n")
+            writer.write("        }")
+        } else {
+            writer.write("\n")
+        }
+        writer.write("\n      }")
         writer.flush()
     }
 

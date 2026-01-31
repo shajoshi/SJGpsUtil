@@ -25,7 +25,8 @@ data class TrackingSettings(
     val intervalSeconds: Long = MIN_INTERVAL_SECONDS,
     val folderUri: String? = null,
     val outputFormat: OutputFormat = OutputFormat.KML,
-    val disablePointFiltering: Boolean = false
+    val disablePointFiltering: Boolean = false,
+    val enableAccelerometer: Boolean = true
 )
 
 class SettingsRepository(private val context: Context) {
@@ -33,6 +34,7 @@ class SettingsRepository(private val context: Context) {
     private val folderUriKey = stringPreferencesKey("folder_uri")
     private val outputFormatKey = stringPreferencesKey("output_format")
     private val disableFilteringKey = booleanPreferencesKey("disable_point_filtering")
+    private val enableAccelerometerKey = booleanPreferencesKey("enable_accelerometer")
 
     val settingsFlow: Flow<TrackingSettings> = context.settingsDataStore.data.map { prefs ->
         TrackingSettings(
@@ -41,7 +43,8 @@ class SettingsRepository(private val context: Context) {
             outputFormat = runCatching {
                 prefs[outputFormatKey]?.let { OutputFormat.valueOf(it) }
             }.getOrNull() ?: OutputFormat.KML,
-            disablePointFiltering = prefs[disableFilteringKey] ?: false
+            disablePointFiltering = prefs[disableFilteringKey] ?: false,
+            enableAccelerometer = prefs[enableAccelerometerKey] ?: true
         )
     }
 
@@ -70,6 +73,12 @@ class SettingsRepository(private val context: Context) {
     suspend fun updateDisablePointFiltering(disable: Boolean) {
         context.settingsDataStore.edit { prefs ->
             prefs[disableFilteringKey] = disable
+        }
+    }
+
+    suspend fun updateEnableAccelerometer(enable: Boolean) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[enableAccelerometerKey] = enable
         }
     }
 }

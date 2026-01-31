@@ -153,6 +153,8 @@ fun TrackingScreen(modifier: Modifier = Modifier) {
                 bearingText
             }
             Text("Bearing: $bearingDisplay")
+            val accelZMeanText = latestSample?.accelZMean?.let { "%.3f m/s²".format(it) } ?: "--"
+            Text("Accel Z mean: $accelZMeanText")
         }
 
         Spacer(modifier = Modifier.height(8.dp))

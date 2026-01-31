@@ -156,6 +156,30 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
         Spacer(modifier = Modifier.height(8.dp))
 
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Record acceleration")
+            val recordAccelState = rememberUpdatedState(settings.enableAccelerometer)
+            Switch(
+                checked = recordAccelState.value,
+                onCheckedChange = { checked ->
+                    scope.launch(Dispatchers.IO) {
+                        repository.updateEnableAccelerometer(checked)
+                    }
+                    Toast.makeText(
+                        context,
+                        if (checked) "Acceleration recording enabled" else "Acceleration recording disabled",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
         Text("Output format:")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val currentFormat = settings.outputFormat
@@ -197,16 +221,18 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         Spacer(modifier = Modifier.height(8.dp))
 
         Text("Save folder: ${folderLabel ?: defaultDownloadsPath(context)}")
-        OutlinedButton(onClick = { folderPicker.launch(null) }) {
-            Text("Choose folder")
-        }
-        OutlinedButton(onClick = {
-            folderLabel = null
-            scope.launch(Dispatchers.IO) {
-                repository.updateFolderUri(null)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { folderPicker.launch(null) }) {
+                Text("Choose folder")
             }
-        }) {
-            Text("Use Downloads")
+            OutlinedButton(onClick = {
+                folderLabel = null
+                scope.launch(Dispatchers.IO) {
+                    repository.updateFolderUri(null)
+                }
+            }) {
+                Text("Use Downloads")
+            }
         }
     }
 }

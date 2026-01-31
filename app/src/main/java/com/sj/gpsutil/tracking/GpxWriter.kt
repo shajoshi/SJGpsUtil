@@ -35,6 +35,17 @@ class GpxWriter(outputStream: OutputStream) : TrackWriter {
             writer.write("<ele>$ele</ele>\n")
         }
         writer.write("<time>$time</time>\n")
+        if (sample.accelXMean != null) {
+            writer.write("<extensions>\n")
+            writer.write("<sj:accel>\n")
+            writer.write("<sj:xMean>${"%.3f".format(sample.accelXMean)}</sj:xMean>\n")
+            writer.write("<sj:yMean>${"%.3f".format(sample.accelYMean)}</sj:yMean>\n")
+            writer.write("<sj:zMean>${"%.3f".format(sample.accelZMean)}</sj:zMean>\n")
+            writer.write("<sj:magMax>${"%.3f".format(sample.accelMagnitudeMax)}</sj:magMax>\n")
+            writer.write("<sj:rms>${"%.3f".format(sample.accelRMS)}</sj:rms>\n")
+            writer.write("</sj:accel>\n")
+            writer.write("</extensions>\n")
+        }
         writer.write("</trkpt>")
         writer.newLine()
         writer.flush()

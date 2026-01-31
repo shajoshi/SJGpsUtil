@@ -19,7 +19,12 @@ data class TrackingSample(
     val verticalAccuracyMeters: Float?,
     val accuracyMeters: Float?,
     val satelliteCount: Int?,
-    val timestampMillis: Long
+    val timestampMillis: Long,
+    val accelXMean: Float? = null,
+    val accelYMean: Float? = null,
+    val accelZMean: Float? = null,
+    val accelMagnitudeMax: Float? = null,
+    val accelRMS: Float? = null
 )
 
 object TrackingState {

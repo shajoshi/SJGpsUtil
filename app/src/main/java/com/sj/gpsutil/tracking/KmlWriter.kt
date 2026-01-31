@@ -32,6 +32,11 @@ class KmlWriter(outputStream: OutputStream) : TrackWriter {
         val bearing = sample.bearingDegrees?.let { "%.1f".format(it) } ?: ""
         val accuracy = sample.accuracyMeters?.let { "%.1f".format(it) } ?: ""
         val verticalAccuracy = sample.verticalAccuracyMeters?.let { "%.1f".format(it) } ?: ""
+        val accelXMean = sample.accelXMean?.let { "%.3f".format(it) } ?: ""
+        val accelYMean = sample.accelYMean?.let { "%.3f".format(it) } ?: ""
+        val accelZMean = sample.accelZMean?.let { "%.3f".format(it) } ?: ""
+        val accelMagMax = sample.accelMagnitudeMax?.let { "%.3f".format(it) } ?: ""
+        val accelRMS = sample.accelRMS?.let { "%.3f".format(it) } ?: ""
 
         trackEntries.append("<when>$timestamp</when>\n")
         trackEntries.append("<gx:coord>${sample.longitude} ${sample.latitude} $altitude</gx:coord>\n")
@@ -54,6 +59,18 @@ class KmlWriter(outputStream: OutputStream) : TrackWriter {
         writer.newLine()
         writer.write("<Data name=\"verticalAccuracyMeters\"><value>$verticalAccuracy</value></Data>")
         writer.newLine()
+        if (sample.accelXMean != null) {
+            writer.write("<Data name=\"accelXMean\"><value>$accelXMean</value></Data>")
+            writer.newLine()
+            writer.write("<Data name=\"accelYMean\"><value>$accelYMean</value></Data>")
+            writer.newLine()
+            writer.write("<Data name=\"accelZMean\"><value>$accelZMean</value></Data>")
+            writer.newLine()
+            writer.write("<Data name=\"accelMagnitudeMax\"><value>$accelMagMax</value></Data>")
+            writer.newLine()
+            writer.write("<Data name=\"accelRMS\"><value>$accelRMS</value></Data>")
+            writer.newLine()
+        }
         writer.write("</ExtendedData>")
         writer.newLine()
         writer.write("<Point>")

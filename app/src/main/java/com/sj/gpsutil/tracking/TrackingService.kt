@@ -6,6 +6,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.location.GnssStatus
 import android.location.Location
 import android.location.LocationManager
@@ -53,6 +57,7 @@ class TrackingService : Service() {
     private lateinit var locationCallback: LocationCallback
     private val fusedLocationClient by lazy { LocationServices.getFusedLocationProviderClient(this) }
     private val locationManager by lazy { getSystemService(Context.LOCATION_SERVICE) as LocationManager }
+    private val sensorManager by lazy { getSystemService(Context.SENSOR_SERVICE) as SensorManager }
     private var gnssStatusCallback: GnssStatus.Callback? = null
     private val settingsRepository by lazy { SettingsRepository(applicationContext) }
     private val fileStore by lazy { TrackingFileStore(applicationContext) }
@@ -66,6 +71,9 @@ class TrackingService : Service() {
     private var rejectedSamplesSinceWindowReset = 0
     private var lastRejectionWarningAtMillis = 0L
     private var disablePointFiltering: Boolean = false
+    private var enableAccelerometer: Boolean = true
+    private val accelBuffer = mutableListOf<FloatArray>()
+    private val accelLock = Any()
 
     override fun onCreate() {
         super.onCreate()
@@ -75,6 +83,7 @@ class TrackingService : Service() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val location = result.lastLocation ?: return
+                val accelMetrics = if (enableAccelerometer) computeAccelMetrics() else null
                 val sample = TrackingSample(
                     latitude = location.latitude,
                     longitude = location.longitude,
@@ -84,7 +93,12 @@ class TrackingService : Service() {
                     verticalAccuracyMeters = if (location.hasVerticalAccuracy()) location.verticalAccuracyMeters else null,
                     accuracyMeters = if (location.hasAccuracy()) location.accuracy else null,
                     satelliteCount = TrackingState.satelliteCount.value,
-                    timestampMillis = location.time
+                    timestampMillis = location.time,
+                    accelXMean = accelMetrics?.get(0),
+                    accelYMean = accelMetrics?.get(1),
+                    accelZMean = accelMetrics?.get(2),
+                    accelMagnitudeMax = accelMetrics?.get(3),
+                    accelRMS = accelMetrics?.get(4)
                 )
                 sample.verticalAccuracyMeters?.let {
                     Log.d("TrackingService", "Vertical accuracy: ${String.format("%.1f", it)} m")
@@ -110,6 +124,70 @@ class TrackingService : Service() {
             }
         }
         registerGnssCallback()
+    }
+
+    private val accelerometerListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent?) {
+            if (event?.sensor?.type == Sensor.TYPE_ACCELEROMETER && enableAccelerometer) {
+                synchronized(accelLock) {
+                    accelBuffer.add(floatArrayOf(event.values[0], event.values[1], event.values[2]))
+                    if (accelBuffer.size > 1000) {
+                        accelBuffer.removeAt(0)
+                    }
+                }
+            }
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
+
+    private fun registerAccelerometerListener() {
+        if (!enableAccelerometer) return
+        val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        if (accelerometer != null) {
+            sensorManager.registerListener(
+                accelerometerListener,
+                accelerometer,
+                SensorManager.SENSOR_DELAY_GAME
+            )
+        }
+    }
+
+    private fun unregisterAccelerometerListener() {
+        sensorManager.unregisterListener(accelerometerListener)
+    }
+
+    private fun computeAccelMetrics(): FloatArray? {
+        synchronized(accelLock) {
+            if (accelBuffer.isEmpty()) return null
+
+            var sumX = 0f
+            var sumY = 0f
+            var sumZ = 0f
+            var maxMagnitude = 0f
+            var sumSquares = 0f
+
+            accelBuffer.forEach { values ->
+                sumX += values[0]
+                sumY += values[1]
+                sumZ += values[2]
+                val magnitude = kotlin.math.sqrt(
+                    values[0] * values[0] + values[1] * values[1] + values[2] * values[2]
+                )
+                if (magnitude > maxMagnitude) maxMagnitude = magnitude
+                sumSquares += magnitude * magnitude
+            }
+
+            val count = accelBuffer.size
+            val meanX = sumX / count
+            val meanY = sumY / count
+            val meanZ = sumZ / count
+            val rms = kotlin.math.sqrt(sumSquares / count)
+
+            accelBuffer.clear()
+
+            return floatArrayOf(meanX, meanY, meanZ, maxMagnitude, rms)
+        }
     }
 
     private fun applyDistanceAccuracyConfigFromManifest() {
@@ -140,6 +218,7 @@ class TrackingService : Service() {
         TrackingState.updateStatus(TrackingStatus.Idle)
         isForeground = false
         unregisterGnssCallback()
+        unregisterAccelerometerListener()
     }
 
     private fun startRecording() {
@@ -149,6 +228,7 @@ class TrackingService : Service() {
             if (trackWriter == null) {
                 val settings = settingsRepository.settingsFlow.first()
                 disablePointFiltering = settings.disablePointFiltering
+                enableAccelerometer = settings.enableAccelerometer
                 currentIntervalSeconds = settings.intervalSeconds
                 val handle = runCatching { fileStore.createTrackOutputStream(settings) }.getOrNull()
                     ?: run {
@@ -171,6 +251,7 @@ class TrackingService : Service() {
             resetRejectionCounters()
             TrackingState.resetNotMovingTimer()
             TrackingState.resetSkippedPoints()
+            registerAccelerometerListener()
             startLocationUpdates(currentIntervalSeconds)
             updateNotification("Recording")
         }
@@ -182,6 +263,7 @@ class TrackingService : Service() {
         currentStatus = TrackingStatus.Paused
         TrackingState.updateStatus(currentStatus)
         TrackingState.onRecordingPaused()
+        unregisterAccelerometerListener()
         updateNotification("Paused")
     }
 
@@ -197,6 +279,7 @@ class TrackingService : Service() {
         resetRejectionCounters()
         TrackingState.resetNotMovingTimer()
         TrackingState.resetSkippedPoints()
+        unregisterAccelerometerListener()
         stopForeground(STOP_FOREGROUND_REMOVE)
         isForeground = false
         stopSelf()

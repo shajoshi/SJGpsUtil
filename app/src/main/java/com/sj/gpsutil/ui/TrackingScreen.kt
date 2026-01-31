@@ -155,6 +155,27 @@ fun TrackingScreen(modifier: Modifier = Modifier) {
             Text("Bearing: $bearingDisplay")
             val accelZMeanText = latestSample?.accelZMean?.let { "%.3f m/s²".format(it) } ?: "--"
             Text("Accel Z mean: $accelZMeanText")
+            
+            // Road quality and feature detection
+            val roadQualityText = latestSample?.roadQuality?.let { quality ->
+                when (quality) {
+                    "smooth" -> "🟢 Smooth"
+                    "average" -> "🟡 Average"
+                    "rough" -> "🔴 Rough"
+                    else -> quality
+                }
+            } ?: "--"
+            Text("Road quality: $roadQualityText")
+            
+            latestSample?.featureDetected?.let { feature ->
+                val featureText = when (feature) {
+                    "speed_bump" -> "⚠️ Speed Bump"
+                    "pothole" -> "🕳️ Pothole"
+                    "bump" -> "⚡ Bump"
+                    else -> feature
+                }
+                Text("Feature: $featureText", color = androidx.compose.ui.graphics.Color.Red)
+            }
         }
 
         Spacer(modifier = Modifier.height(8.dp))

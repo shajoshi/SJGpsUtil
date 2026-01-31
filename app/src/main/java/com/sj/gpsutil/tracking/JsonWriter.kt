@@ -88,7 +88,42 @@ class JsonWriter(outputStream: OutputStream) : TrackWriter {
             writer.write("          \"yMean\": ${"%.3f".format(sample.accelYMean)},\n")
             writer.write("          \"zMean\": ${"%.3f".format(sample.accelZMean)},\n")
             writer.write("          \"magMax\": ${"%.3f".format(sample.accelMagnitudeMax)},\n")
-            writer.write("          \"rms\": ${"%.3f".format(sample.accelRMS)}\n")
+            writer.write("          \"rms\": ${"%.3f".format(sample.accelRMS)}")
+            sample.roadQuality?.let {
+                writer.write(",\n")
+                writer.write("          \"roadQuality\": \"$it\"")
+            }
+            sample.featureDetected?.let {
+                writer.write(",\n")
+                writer.write("          \"featureDetected\": \"$it\"")
+            }
+            // Simple color mapping for downstream styling
+            when (sample.roadQuality) {
+                "smooth" -> {
+                    writer.write(",\n")
+                    writer.write("          \"styleId\": \"smoothStyle\",\n")
+                    writer.write("          \"color\": \"#00FF00\"")
+                }
+                "average" -> {
+                    writer.write(",\n")
+                    writer.write("          \"styleId\": \"averageStyle\",\n")
+                    writer.write("          \"color\": \"#FFA500\"")
+                }
+                "rough" -> {
+                    writer.write(",\n")
+                    writer.write("          \"styleId\": \"roughStyle\",\n")
+                    writer.write("          \"color\": \"#FF0000\"")
+                }
+            }
+            sample.peakCount?.let {
+                writer.write(",\n")
+                writer.write("          \"peakCount\": $it")
+            }
+            sample.stdDev?.let {
+                writer.write(",\n")
+                writer.write("          \"stdDev\": ${"%.3f".format(it)}")
+            }
+            writer.write("\n")
             writer.write("        }")
         } else {
             writer.write("\n")

@@ -21,6 +21,13 @@ class KmlWriter(outputStream: OutputStream) : TrackWriter {
         writer.newLine()
         writer.write("<name>SJGpsUtil Track</name>")
         writer.newLine()
+        // Styles for point coloring by road quality
+        writer.write("<Style id=\"smoothStyle\"><IconStyle><color>ff00ff00</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>")
+        writer.newLine()
+        writer.write("<Style id=\"averageStyle\"><IconStyle><color>ff00a5ff</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>")
+        writer.newLine()
+        writer.write("<Style id=\"roughStyle\"><IconStyle><color>ff0000ff</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>")
+        writer.newLine()
         writer.flush()
     }
 
@@ -43,8 +50,19 @@ class KmlWriter(outputStream: OutputStream) : TrackWriter {
 
         writer.write("<Placemark>")
         writer.newLine()
-        writer.write("<name></name>")
+        val featureName = sample.featureDetected ?: ""
+        writer.write("<name>$featureName</name>")
         writer.newLine()
+        val styleId = when (sample.roadQuality) {
+            "smooth" -> "smoothStyle"
+            "average" -> "averageStyle"
+            "rough" -> "roughStyle"
+            else -> null
+        }
+        styleId?.let {
+            writer.write("<styleUrl>#$it</styleUrl>")
+            writer.newLine()
+        }
         writer.write("<TimeStamp><when>$timestamp</when></TimeStamp>")
         writer.newLine()
         writer.write("<ExtendedData>")
@@ -60,6 +78,7 @@ class KmlWriter(outputStream: OutputStream) : TrackWriter {
         writer.write("<Data name=\"verticalAccuracyMeters\"><value>$verticalAccuracy</value></Data>")
         writer.newLine()
         if (sample.accelXMean != null) {
+            val formattedStdDev = sample.stdDev?.let { "%.3f".format(it) }
             writer.write("<Data name=\"accelXMean\"><value>$accelXMean</value></Data>")
             writer.newLine()
             writer.write("<Data name=\"accelYMean\"><value>$accelYMean</value></Data>")
@@ -70,6 +89,22 @@ class KmlWriter(outputStream: OutputStream) : TrackWriter {
             writer.newLine()
             writer.write("<Data name=\"accelRMS\"><value>$accelRMS</value></Data>")
             writer.newLine()
+            sample.roadQuality?.let {
+                writer.write("<Data name=\"roadQuality\"><value>$it</value></Data>")
+                writer.newLine()
+            }
+            sample.featureDetected?.let {
+                writer.write("<Data name=\"featureDetected\"><value>$it</value></Data>")
+                writer.newLine()
+            }
+            sample.peakCount?.let {
+                writer.write("<Data name=\"peakCount\"><value>$it</value></Data>")
+                writer.newLine()
+            }
+            sample.stdDev?.let {
+                writer.write("<Data name=\"stdDev\"><value>${formattedStdDev}</value></Data>")
+                writer.newLine()
+            }
         }
         writer.write("</ExtendedData>")
         writer.newLine()
@@ -118,15 +153,17 @@ class KmlWriter(outputStream: OutputStream) : TrackWriter {
 
         totalDistanceMeters?.let { meters ->
             val km = meters / 1000.0
+            val formattedMeters = "%.1f".format(meters)
+            val formattedKm = "%.3f".format(km)
             writer.write("<Placemark>")
             writer.newLine()
             writer.write("<name>Summary</name>")
             writer.newLine()
             writer.write("<ExtendedData>")
             writer.newLine()
-            writer.write("<Data name=\"totalDistanceMeters\"><value>${"%.1f".format(meters)}</value></Data>")
+            writer.write("<Data name=\"totalDistanceMeters\"><value>${formattedMeters}</value></Data>")
             writer.newLine()
-            writer.write("<Data name=\"totalDistanceKm\"><value>${"%.3f".format(km)}</value></Data>")
+            writer.write("<Data name=\"totalDistanceKm\"><value>${formattedKm}</value></Data>")
             writer.newLine()
             writer.write("</ExtendedData>")
             writer.newLine()

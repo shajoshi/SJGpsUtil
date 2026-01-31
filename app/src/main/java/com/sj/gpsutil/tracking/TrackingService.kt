@@ -18,6 +18,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.content.pm.PackageManager
+import com.sj.gpsutil.data.CalibrationSettings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -72,6 +73,7 @@ class TrackingService : Service() {
     private var lastRejectionWarningAtMillis = 0L
     private var disablePointFiltering: Boolean = false
     private var enableAccelerometer: Boolean = true
+    private var calibration = CalibrationSettings()
     private val accelBuffer = mutableListOf<FloatArray>()
     private val accelLock = Any()
 
@@ -94,11 +96,15 @@ class TrackingService : Service() {
                     accuracyMeters = if (location.hasAccuracy()) location.accuracy else null,
                     satelliteCount = TrackingState.satelliteCount.value,
                     timestampMillis = location.time,
-                    accelXMean = accelMetrics?.get(0),
-                    accelYMean = accelMetrics?.get(1),
-                    accelZMean = accelMetrics?.get(2),
-                    accelMagnitudeMax = accelMetrics?.get(3),
-                    accelRMS = accelMetrics?.get(4)
+                    accelXMean = accelMetrics?.meanX,
+                    accelYMean = accelMetrics?.meanY,
+                    accelZMean = accelMetrics?.meanZ,
+                    accelMagnitudeMax = accelMetrics?.maxMagnitude,
+                    accelRMS = accelMetrics?.rms,
+                    roadQuality = accelMetrics?.roadQuality,
+                    featureDetected = accelMetrics?.featureDetected,
+                    peakCount = accelMetrics?.peakCount,
+                    stdDev = accelMetrics?.stdDev
                 )
                 sample.verticalAccuracyMeters?.let {
                     Log.d("TrackingService", "Vertical accuracy: ${String.format("%.1f", it)} m")
@@ -157,37 +163,154 @@ class TrackingService : Service() {
         sensorManager.unregisterListener(accelerometerListener)
     }
 
-    private fun computeAccelMetrics(): FloatArray? {
+    private fun computeAccelMetrics(): AccelMetrics? {
         synchronized(accelLock) {
             if (accelBuffer.isEmpty()) return null
 
+            // Step 1: Remove gravity by subtracting mean Z
+            val meanZGravity = accelBuffer.map { it[2] }.average().toFloat()
+            val detrended = accelBuffer.map {
+                floatArrayOf(it[0], it[1], it[2] - meanZGravity)
+            }
+
+            // Step 2: Apply simple moving average filter (window size from calibration)
+            val smoothed = applyMovingAverage(detrended, calibration.movingAverageWindow.coerceAtLeast(1))
+
+            // Step 3: Calculate metrics
             var sumX = 0f
             var sumY = 0f
             var sumZ = 0f
             var maxMagnitude = 0f
             var sumSquares = 0f
+            var peakCount = 0
+            val magnitudes = mutableListOf<Float>()
 
-            accelBuffer.forEach { values ->
+            smoothed.forEach { values ->
                 sumX += values[0]
                 sumY += values[1]
                 sumZ += values[2]
                 val magnitude = kotlin.math.sqrt(
                     values[0] * values[0] + values[1] * values[1] + values[2] * values[2]
                 )
+                magnitudes.add(magnitude)
                 if (magnitude > maxMagnitude) maxMagnitude = magnitude
                 sumSquares += magnitude * magnitude
+
+                // Peak detection using calibration threshold
+                if (kotlin.math.abs(values[2]) > calibration.peakThresholdZ) peakCount++
             }
 
-            val count = accelBuffer.size
+            val count = smoothed.size
             val meanX = sumX / count
             val meanY = sumY / count
             val meanZ = sumZ / count
             val rms = kotlin.math.sqrt(sumSquares / count)
 
+            // Calculate standard deviation
+            val meanMagnitude = magnitudes.average().toFloat()
+            val variance = magnitudes.map { (it - meanMagnitude) * (it - meanMagnitude) }.average().toFloat()
+            val stdDev = kotlin.math.sqrt(variance)
+
+            // Step 4: Classify road quality (motorcycle-adjusted thresholds)
+            val roadQuality = when {
+                rms < calibration.rmsSmoothMax && peakCount < calibration.peakCountSmoothMax -> "smooth"
+                rms < calibration.rmsAverageMax && peakCount < calibration.peakCountAverageMax -> "average"
+                else -> "rough"
+            }
+
+            // Step 5: Detect features (analyze Z-axis pattern)
+            val feature = detectFeature(
+                smoothed,
+                symmetricThreshold = calibration.symmetricBumpThreshold,
+                potholeThreshold = calibration.potholeDipThreshold,
+                bumpSpikeThreshold = calibration.bumpSpikeThreshold
+            )
+
             accelBuffer.clear()
 
-            return floatArrayOf(meanX, meanY, meanZ, maxMagnitude, rms)
+            return AccelMetrics(
+                meanX, meanY, meanZ, maxMagnitude, rms,
+                peakCount, stdDev, roadQuality, feature
+            )
         }
+    }
+
+    private fun applyMovingAverage(data: List<FloatArray>, windowSize: Int): List<FloatArray> {
+        if (data.size < windowSize) return data
+        val result = mutableListOf<FloatArray>()
+        for (i in data.indices) {
+            val start = maxOf(0, i - windowSize / 2)
+            val end = minOf(data.size, i + windowSize / 2 + 1)
+            val window = data.subList(start, end)
+            val avgX = window.map { it[0] }.average().toFloat()
+            val avgY = window.map { it[1] }.average().toFloat()
+            val avgZ = window.map { it[2] }.average().toFloat()
+            result.add(floatArrayOf(avgX, avgY, avgZ))
+        }
+        return result
+    }
+
+    private fun detectFeature(
+        data: List<FloatArray>,
+        symmetricThreshold: Float,
+        potholeThreshold: Float,
+        bumpSpikeThreshold: Float
+    ): String? {
+        if (data.size < 10) return null
+        val zValues = data.map { it[2] }
+
+        // Speed bump: symmetric rise and fall pattern
+        val hasSymmetricBump = detectSymmetricPattern(zValues, symmetricThreshold)
+        if (hasSymmetricBump) return "speed_bump"
+
+        // Pothole: sharp drop and recovery (asymmetric dip)
+        val hasAsymmetricDip = detectAsymmetricDip(zValues, potholeThreshold)
+        if (hasAsymmetricDip) return "pothole"
+
+        // Single bump
+        if (zValues.any { kotlin.math.abs(it) > bumpSpikeThreshold }) return "bump"
+
+        return null
+    }
+
+    private fun detectSymmetricPattern(zValues: List<Float>, threshold: Float): Boolean {
+        // Look for rise followed by fall pattern
+        for (i in 0 until zValues.size - 4) {
+            val segment = zValues.subList(i, minOf(i + 5, zValues.size))
+            val maxVal = segment.maxOrNull() ?: continue
+            val maxIdx = segment.indexOf(maxVal)
+
+            // Check if peak is in middle and exceeds threshold
+            if (maxVal > threshold && maxIdx in 1..3) {
+                val before = segment.subList(0, maxIdx).average().toFloat()
+                val after = segment.subList(maxIdx + 1, segment.size).average().toFloat()
+                // Symmetric if both sides are similar and below peak
+                if (kotlin.math.abs(before - after) < 1.0f && before < maxVal * 0.7f) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private fun detectAsymmetricDip(zValues: List<Float>, threshold: Float): Boolean {
+        // Look for sharp drop pattern
+        for (i in 0 until zValues.size - 4) {
+            val segment = zValues.subList(i, minOf(i + 5, zValues.size))
+            val minVal = segment.minOrNull() ?: continue
+            val minIdx = segment.indexOf(minVal)
+
+            // Check if dip is sharp and exceeds threshold
+            if (minVal < threshold && minIdx in 1..3) {
+                val before = segment.subList(0, minIdx).average().toFloat()
+                val after = segment.subList(minIdx + 1, segment.size).average().toFloat()
+                // Asymmetric dip: sharp drop, gradual recovery
+                if (before > minVal && after > minVal) {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private fun applyDistanceAccuracyConfigFromManifest() {
@@ -230,6 +353,7 @@ class TrackingService : Service() {
                 disablePointFiltering = settings.disablePointFiltering
                 enableAccelerometer = settings.enableAccelerometer
                 currentIntervalSeconds = settings.intervalSeconds
+                calibration = settings.calibration
                 val handle = runCatching { fileStore.createTrackOutputStream(settings) }.getOrNull()
                     ?: run {
                         updateNotification("Failed to create file")

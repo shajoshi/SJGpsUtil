@@ -24,7 +24,11 @@ data class TrackingSample(
     val accelYMean: Float? = null,
     val accelZMean: Float? = null,
     val accelMagnitudeMax: Float? = null,
-    val accelRMS: Float? = null
+    val accelRMS: Float? = null,
+    val roadQuality: String? = null,
+    val featureDetected: String? = null,
+    val peakCount: Int? = null,
+    val stdDev: Float? = null
 )
 
 object TrackingState {

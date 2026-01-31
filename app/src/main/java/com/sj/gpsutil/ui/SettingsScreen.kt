@@ -20,6 +20,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.Switch
@@ -39,6 +41,7 @@ import android.widget.Toast
 import com.sj.gpsutil.data.OutputFormat
 import com.sj.gpsutil.data.SettingsRepository
 import com.sj.gpsutil.data.TrackingSettings
+import com.sj.gpsutil.data.CalibrationSettings
 import com.sj.gpsutil.data.MIN_INTERVAL_SECONDS
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -55,6 +58,19 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     var folderLabel by remember(settings.folderUri) {
         mutableStateOf(folderPathFromUri(context, settings.folderUri))
     }
+    var showCalibration by remember { mutableStateOf(false) }
+
+    // Calibration state (as strings for TextFields)
+    val cal = settings.calibration
+    var rmsSmoothMax by remember(cal) { mutableStateOf(cal.rmsSmoothMax.toString()) }
+    var rmsAverageMax by remember(cal) { mutableStateOf(cal.rmsAverageMax.toString()) }
+    var peakThresholdZ by remember(cal) { mutableStateOf(cal.peakThresholdZ.toString()) }
+    var symmetricBumpThreshold by remember(cal) { mutableStateOf(cal.symmetricBumpThreshold.toString()) }
+    var potholeDipThreshold by remember(cal) { mutableStateOf(cal.potholeDipThreshold.toString()) }
+    var bumpSpikeThreshold by remember(cal) { mutableStateOf(cal.bumpSpikeThreshold.toString()) }
+    var peakCountSmoothMax by remember(cal) { mutableStateOf(cal.peakCountSmoothMax.toString()) }
+    var peakCountAverageMax by remember(cal) { mutableStateOf(cal.peakCountAverageMax.toString()) }
+    var movingAverageWindow by remember(cal) { mutableStateOf(cal.movingAverageWindow.toString()) }
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -180,6 +196,13 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
         Spacer(modifier = Modifier.height(8.dp))
 
+        // Calibration entry point
+        Button(onClick = { showCalibration = true }) {
+            Text("Calibration")
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
         Text("Output format:")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val currentFormat = settings.outputFormat
@@ -235,6 +258,171 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             }
         }
     }
+
+    if (showCalibration) {
+        CalibrationDialog(
+            initialValues = settings.calibration,
+            rmsSmoothMaxText = rmsSmoothMax,
+            rmsAverageMaxText = rmsAverageMax,
+            peakThresholdZText = peakThresholdZ,
+            symmetricBumpThresholdText = symmetricBumpThreshold,
+            potholeDipThresholdText = potholeDipThreshold,
+            bumpSpikeThresholdText = bumpSpikeThreshold,
+            peakCountSmoothMaxText = peakCountSmoothMax,
+            peakCountAverageMaxText = peakCountAverageMax,
+            movingAverageWindowText = movingAverageWindow,
+            onValuesChange = { newVals ->
+                rmsSmoothMax = newVals.rmsSmoothMax
+                rmsAverageMax = newVals.rmsAverageMax
+                peakThresholdZ = newVals.peakThresholdZ
+                symmetricBumpThreshold = newVals.symmetricBumpThreshold
+                potholeDipThreshold = newVals.potholeDipThreshold
+                bumpSpikeThreshold = newVals.bumpSpikeThreshold
+                peakCountSmoothMax = newVals.peakCountSmoothMax
+                peakCountAverageMax = newVals.peakCountAverageMax
+                movingAverageWindow = newVals.movingAverageWindow
+            },
+            onResetDefaults = {
+                val defaults = CalibrationSettings()
+                rmsSmoothMax = defaults.rmsSmoothMax.toString()
+                rmsAverageMax = defaults.rmsAverageMax.toString()
+                peakThresholdZ = defaults.peakThresholdZ.toString()
+                symmetricBumpThreshold = defaults.symmetricBumpThreshold.toString()
+                potholeDipThreshold = defaults.potholeDipThreshold.toString()
+                bumpSpikeThreshold = defaults.bumpSpikeThreshold.toString()
+                peakCountSmoothMax = defaults.peakCountSmoothMax.toString()
+                peakCountAverageMax = defaults.peakCountAverageMax.toString()
+                movingAverageWindow = defaults.movingAverageWindow.toString()
+            },
+            onSave = {
+                val parsed = parseCalibration(
+                    rmsSmoothMax,
+                    rmsAverageMax,
+                    peakThresholdZ,
+                    symmetricBumpThreshold,
+                    potholeDipThreshold,
+                    bumpSpikeThreshold,
+                    peakCountSmoothMax,
+                    peakCountAverageMax,
+                    movingAverageWindow
+                )
+                if (parsed == null) {
+                    Toast.makeText(context, "Enter valid calibration numbers", Toast.LENGTH_LONG).show()
+                    return@CalibrationDialog
+                }
+                scope.launch(Dispatchers.IO) {
+                    repository.updateCalibration(parsed)
+                }
+                Toast.makeText(context, "Calibration saved", Toast.LENGTH_LONG).show()
+                showCalibration = false
+            },
+            onDismiss = { showCalibration = false }
+        )
+    }
+}
+
+@Composable
+private fun CalibrationDialog(
+    initialValues: CalibrationSettings,
+    rmsSmoothMaxText: String,
+    rmsAverageMaxText: String,
+    peakThresholdZText: String,
+    symmetricBumpThresholdText: String,
+    potholeDipThresholdText: String,
+    bumpSpikeThresholdText: String,
+    peakCountSmoothMaxText: String,
+    peakCountAverageMaxText: String,
+    movingAverageWindowText: String,
+    onValuesChange: (CalibrationTextValues) -> Unit,
+    onResetDefaults: () -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Calibration") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                CalibrationField("RMS smooth max", rmsSmoothMaxText) { onValuesChange(CalibrationTextValues(it, rmsAverageMaxText, peakThresholdZText, symmetricBumpThresholdText, potholeDipThresholdText, bumpSpikeThresholdText, peakCountSmoothMaxText, peakCountAverageMaxText, movingAverageWindowText)) }
+                CalibrationField("RMS average max", rmsAverageMaxText) { onValuesChange(CalibrationTextValues(rmsSmoothMaxText, it, peakThresholdZText, symmetricBumpThresholdText, potholeDipThresholdText, bumpSpikeThresholdText, peakCountSmoothMaxText, peakCountAverageMaxText, movingAverageWindowText)) }
+                CalibrationField("Peak threshold Z", peakThresholdZText) { onValuesChange(CalibrationTextValues(rmsSmoothMaxText, rmsAverageMaxText, it, symmetricBumpThresholdText, potholeDipThresholdText, bumpSpikeThresholdText, peakCountSmoothMaxText, peakCountAverageMaxText, movingAverageWindowText)) }
+                CalibrationField("Speed bump threshold", symmetricBumpThresholdText) { onValuesChange(CalibrationTextValues(rmsSmoothMaxText, rmsAverageMaxText, peakThresholdZText, it, potholeDipThresholdText, bumpSpikeThresholdText, peakCountSmoothMaxText, peakCountAverageMaxText, movingAverageWindowText)) }
+                CalibrationField("Pothole dip threshold", potholeDipThresholdText) { onValuesChange(CalibrationTextValues(rmsSmoothMaxText, rmsAverageMaxText, peakThresholdZText, symmetricBumpThresholdText, it, bumpSpikeThresholdText, peakCountSmoothMaxText, peakCountAverageMaxText, movingAverageWindowText)) }
+                CalibrationField("Bump spike threshold", bumpSpikeThresholdText) { onValuesChange(CalibrationTextValues(rmsSmoothMaxText, rmsAverageMaxText, peakThresholdZText, symmetricBumpThresholdText, potholeDipThresholdText, it, peakCountSmoothMaxText, peakCountAverageMaxText, movingAverageWindowText)) }
+                CalibrationField("Peak count smooth max", peakCountSmoothMaxText) { onValuesChange(CalibrationTextValues(rmsSmoothMaxText, rmsAverageMaxText, peakThresholdZText, symmetricBumpThresholdText, potholeDipThresholdText, bumpSpikeThresholdText, it, peakCountAverageMaxText, movingAverageWindowText)) }
+                CalibrationField("Peak count average max", peakCountAverageMaxText) { onValuesChange(CalibrationTextValues(rmsSmoothMaxText, rmsAverageMaxText, peakThresholdZText, symmetricBumpThresholdText, potholeDipThresholdText, bumpSpikeThresholdText, peakCountSmoothMaxText, it, movingAverageWindowText)) }
+                CalibrationField("Moving average window", movingAverageWindowText) { onValuesChange(CalibrationTextValues(rmsSmoothMaxText, rmsAverageMaxText, peakThresholdZText, symmetricBumpThresholdText, potholeDipThresholdText, bumpSpikeThresholdText, peakCountSmoothMaxText, peakCountAverageMaxText, it)) }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onSave) { Text("Save") }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onResetDefaults) { Text("Reset to Defaults") }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        }
+    )
+}
+
+@Composable
+private fun CalibrationField(label: String, value: String, onChange: (String) -> Unit) {
+    TextField(
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text(label) },
+        value = value,
+        onValueChange = { input ->
+            onChange(input.filter { it.isDigit() || it == '.' || it == '-' })
+        },
+        singleLine = true
+    )
+}
+
+private data class CalibrationTextValues(
+    val rmsSmoothMax: String,
+    val rmsAverageMax: String,
+    val peakThresholdZ: String,
+    val symmetricBumpThreshold: String,
+    val potholeDipThreshold: String,
+    val bumpSpikeThreshold: String,
+    val peakCountSmoothMax: String,
+    val peakCountAverageMax: String,
+    val movingAverageWindow: String
+)
+
+private fun parseCalibration(
+    rmsSmoothMax: String,
+    rmsAverageMax: String,
+    peakThresholdZ: String,
+    symmetricBumpThreshold: String,
+    potholeDipThreshold: String,
+    bumpSpikeThreshold: String,
+    peakCountSmoothMax: String,
+    peakCountAverageMax: String,
+    movingAverageWindow: String
+): CalibrationSettings? {
+    val rmsSmooth = rmsSmoothMax.toFloatOrNull() ?: return null
+    val rmsAvg = rmsAverageMax.toFloatOrNull() ?: return null
+    val peakThresh = peakThresholdZ.toFloatOrNull() ?: return null
+    val sym = symmetricBumpThreshold.toFloatOrNull() ?: return null
+    val pothole = potholeDipThreshold.toFloatOrNull() ?: return null
+    val bump = bumpSpikeThreshold.toFloatOrNull() ?: return null
+    val peakSmooth = peakCountSmoothMax.toIntOrNull() ?: return null
+    val peakAvg = peakCountAverageMax.toIntOrNull() ?: return null
+    val maWindow = movingAverageWindow.toIntOrNull() ?: return null
+    if (maWindow <= 0) return null
+    return CalibrationSettings(
+        rmsSmoothMax = rmsSmooth,
+        rmsAverageMax = rmsAvg,
+        peakThresholdZ = peakThresh,
+        symmetricBumpThreshold = sym,
+        potholeDipThreshold = pothole,
+        bumpSpikeThreshold = bump,
+        peakCountSmoothMax = peakSmooth,
+        peakCountAverageMax = peakAvg,
+        movingAverageWindow = maWindow
+    )
 }
 
 private fun takePersistablePermission(context: Context, uri: Uri) {

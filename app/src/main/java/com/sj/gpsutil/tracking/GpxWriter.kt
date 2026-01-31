@@ -35,6 +35,9 @@ class GpxWriter(outputStream: OutputStream) : TrackWriter {
             writer.write("<ele>$ele</ele>\n")
         }
         writer.write("<time>$time</time>\n")
+        sample.featureDetected?.let { feature ->
+            writer.write("<name>$feature</name>\n")
+        }
         if (sample.accelXMean != null) {
             writer.write("<extensions>\n")
             writer.write("<sj:accel>\n")
@@ -43,6 +46,32 @@ class GpxWriter(outputStream: OutputStream) : TrackWriter {
             writer.write("<sj:zMean>${"%.3f".format(sample.accelZMean)}</sj:zMean>\n")
             writer.write("<sj:magMax>${"%.3f".format(sample.accelMagnitudeMax)}</sj:magMax>\n")
             writer.write("<sj:rms>${"%.3f".format(sample.accelRMS)}</sj:rms>\n")
+            val styleId = when (sample.roadQuality) {
+                "smooth" -> "smoothStyle"
+                "average" -> "averageStyle"
+                "rough" -> "roughStyle"
+                else -> null
+            }
+            val styleColor = when (sample.roadQuality) {
+                "smooth" -> "#00FF00"
+                "average" -> "#FFA500"
+                "rough" -> "#FF0000"
+                else -> null
+            }
+            styleId?.let { writer.write("<sj:styleId>$it</sj:styleId>\n") }
+            styleColor?.let { writer.write("<sj:color>$it</sj:color>\n") }
+            sample.roadQuality?.let {
+                writer.write("<sj:roadQuality>$it</sj:roadQuality>\n")
+            }
+            sample.featureDetected?.let {
+                writer.write("<sj:featureDetected>$it</sj:featureDetected>\n")
+            }
+            sample.peakCount?.let {
+                writer.write("<sj:peakCount>$it</sj:peakCount>\n")
+            }
+            sample.stdDev?.let {
+                writer.write("<sj:stdDev>${"%.3f".format(it)}</sj:stdDev>\n")
+            }
             writer.write("</sj:accel>\n")
             writer.write("</extensions>\n")
         }
